@@ -1,0 +1,9 @@
+config/*
+!config/.gitkeep
+!config/project.example.json
+workspace/*
+!workspace/.gitkeep
+logs/*
+!logs/.gitkeep
+__pycache__/
+*.pyc

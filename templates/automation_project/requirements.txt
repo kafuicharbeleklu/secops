@@ -1,0 +1,4 @@
+colorama
+prompt-toolkit
+google-genai
+fpdf2

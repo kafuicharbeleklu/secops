@@ -1,0 +1,13 @@
+{
+  "project_name": "YOUR PROJECT NAME",
+  "project_slug": "your-project-slug",
+  "owner": "YOUR TEAM",
+  "default_profile": "LOCAL",
+  "workspace_dir": "workspace",
+  "log_dir": "logs",
+  "features": {
+    "precheck_before_run": true,
+    "batch_mode": true,
+    "interactive_mode": true
+  }
+}
