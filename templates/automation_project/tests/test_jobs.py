@@ -37,6 +37,22 @@ class JobTrackerTests(unittest.TestCase):
         self.assertEqual(restored_job.status, "waiting")
         self.assertEqual(restored.active_count, 1)
 
+    def test_cancel_marks_job_inactive_and_persists_result(self):
+        tracker = JobTracker()
+        job = tracker.create("tool", "nmap 10.10.10.10", status="running")
+
+        tracker.cancel(
+            job.job_id,
+            result="log partiel: /tmp/nmap.log",
+            append_detail="annule par utilisateur",
+        )
+
+        self.assertEqual(job.status, "cancelled")
+        self.assertFalse(job.is_active)
+        self.assertEqual(tracker.active_count, 0)
+        self.assertIn("/tmp/nmap.log", job.result)
+        self.assertIn("annule par utilisateur", job.details)
+
 
 if __name__ == "__main__":
     unittest.main()

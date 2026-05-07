@@ -1,4 +1,15 @@
 import re
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ToolFailure:
+    cause: str
+    impact: str
+    next_action: str
+    retry: bool
+    log_path: str
+    severity: str
 
 
 class TerminalRenderer:
@@ -19,8 +30,16 @@ class TerminalRenderer:
             if event_type == "thought":
                 for text_line in self._split_text(event["content"]):
                     idx = len(lines)
-                    lines.append(f"◦ {text_line}")
+                    lines.append(f"• {text_line}")
                     dim_lines.add(idx)
+                continue
+
+            if event_type == "reasoning_summary":
+                for text_line in self._split_text(event["content"]):
+                    idx = len(lines)
+                    lines.append(f"→ {text_line}")
+                    dim_lines.add(idx)
+                previous_event = event
                 continue
 
             if event_type == "tool_start":
@@ -49,28 +68,40 @@ class TerminalRenderer:
                         and result_lines[0] == start_line
                     ):
                         result_lines = result_lines[1:]
+                result_lines.extend(self._format_notification(event))
                 lines.extend(result_lines)
                 previous_event = event
                 continue
 
             if event_type == "tool_denied":
-                tone = "warn"
-                lines.append(f"permission refusee pour {event['name']}")
+                failure = self._tool_failure_from_event(event)
+                tone = failure.severity
+                lines.extend(self._format_tool_failure(event["name"], failure))
+                lines.extend(self._format_notification(event))
                 previous_event = event
                 continue
 
             if event_type == "tool_error":
-                tone = "warn"
-                lines.append(f"erreur outil {event['name']}: {event['error']}")
+                failure = self._tool_failure_from_event(event)
+                tone = failure.severity
+                lines.extend(self._format_tool_failure(event["name"], failure))
+                lines.extend(self._format_notification(event))
                 previous_event = event
                 continue
 
             if event_type == "tool_policy_blocked":
-                tone = "warn"
-                lines.append(f"outil bloque {event['name']}: {event['error']}")
-                remediation = event.get("remediation", "")
-                if remediation:
-                    lines.append(f"  └ action: {remediation}")
+                failure = self._tool_failure_from_event(event)
+                tone = failure.severity
+                lines.extend(self._format_tool_failure(event["name"], failure))
+                lines.extend(self._format_notification(event))
+                previous_event = event
+                continue
+
+            if event_type == "tool_failure":
+                failure = self._coerce_tool_failure(event.get("failure", {}), event)
+                tone = failure.severity
+                lines.extend(self._format_tool_failure(event.get("name", "outil"), failure))
+                lines.extend(self._format_notification(event))
                 previous_event = event
                 continue
 
@@ -95,7 +126,7 @@ class TerminalRenderer:
                 # remove the duplicate thought lines
                 thought_indices = sorted(dim_lines)
                 if thought_indices:
-                    thought_texts = [lines[i].removeprefix("◦ ") for i in thought_indices]
+                    thought_texts = [lines[i].removeprefix("• ") for i in thought_indices]
                     if thought_texts == answer_lines:
                         for i in reversed(thought_indices):
                             lines.pop(i)
@@ -117,6 +148,101 @@ class TerminalRenderer:
             "line_styles": line_styles,
             "meta": {"tool_activity": saw_tool_activity, "model": model_label},
         }
+
+    def _coerce_tool_failure(self, failure, event):
+        if isinstance(failure, ToolFailure):
+            return failure
+        data = failure if isinstance(failure, dict) else {}
+        result = event.get("result", {}) if isinstance(event.get("result", {}), dict) else {}
+        cause = (
+            data.get("cause")
+            or event.get("error")
+            or result.get("error")
+            or event.get("message")
+            or "Erreur outil non detaillee."
+        )
+        impact = data.get("impact") or self._infer_failure_impact(event, str(cause))
+        next_action = (
+            data.get("next_action")
+            or event.get("remediation")
+            or result.get("retry_hint")
+            or self._infer_failure_action(event, str(cause))
+        )
+        retry = data.get("retry")
+        if retry is None:
+            retry = event.get("type") in {"tool_denied", "tool_error"}
+        log_path = data.get("log_path") or result.get("log_path") or event.get("log_path") or ""
+        severity = data.get("severity") or self._infer_failure_severity(event, str(cause))
+        return ToolFailure(
+            cause=str(cause),
+            impact=str(impact),
+            next_action=str(next_action),
+            retry=bool(retry),
+            log_path=str(log_path),
+            severity=str(severity or "warn"),
+        )
+
+    def _tool_failure_from_event(self, event):
+        return self._coerce_tool_failure(event.get("failure", {}), event)
+
+    def _format_tool_failure(self, name, failure):
+        retry_label = "/retry last" if failure.retry else "non"
+        log_label = failure.log_path or "/view last --pager"
+        return [
+            f"  ✖ ERREUR — {name}",
+            f"    Cause      : {failure.cause}",
+            f"    Impact     : {failure.impact}",
+            f"    Action     : {failure.next_action}",
+            f"    Retry      : {retry_label}",
+            f"    Log complet: {log_label}",
+        ]
+
+    def _format_notification(self, event):
+        summary = str(event.get("notification") or "").strip()
+        if not summary:
+            return []
+        return [f"  └ notification: {summary}"]
+
+    def _infer_failure_impact(self, event, cause):
+        event_type = event.get("type", "")
+        name = event.get("name", "outil")
+        lowered = cause.casefold()
+        if event_type == "tool_denied":
+            return "action outil non executee"
+        if event_type == "tool_policy_blocked":
+            return "action bloquee par la politique de securite"
+        if "timeout" in lowered or "expire" in lowered:
+            return "resultat incomplet ou indisponible"
+        if "scope" in lowered or "cible" in lowered or "target" in lowered:
+            return "operation impossible sans cible ou scope valide"
+        if "non installe" in lowered or "introuvable" in lowered:
+            return "outil requis indisponible"
+        return f"{name} interrompu avant resultat exploitable"
+
+    def _infer_failure_action(self, event, cause):
+        event_type = event.get("type", "")
+        lowered = cause.casefold()
+        if event_type == "tool_denied":
+            return "autoriser la relance si l'action est dans le scope"
+        if event.get("remediation"):
+            return event["remediation"]
+        if "timeout" in lowered or "expire" in lowered:
+            return "augmenter le timeout ou reduire le perimetre"
+        if "scope" in lowered:
+            return "verifier le scope autorise avec /scope"
+        if "cible" in lowered or "target" in lowered:
+            return "definir une cible avec /target"
+        if "non installe" in lowered or "introuvable" in lowered:
+            return "installer l'outil via /tools install"
+        return "verifier les arguments, le scope et relancer si necessaire"
+
+    def _infer_failure_severity(self, event, cause):
+        if event.get("type") == "tool_policy_blocked":
+            return "warn"
+        lowered = cause.casefold()
+        if "permission" in lowered or "refusee" in lowered:
+            return "warn"
+        return "error"
 
     def _format_tool_start(self, name, args):
         if name == "query_knowledge":
@@ -309,11 +435,12 @@ class TerminalRenderer:
             parts.append(f"stdout: {stdout_lines} ligne(s)")
         if stderr_lines:
             parts.append(f"stderr: {stderr_lines} ligne(s)")
-        if result.get("log_path"):
-            parts.append(f"log: {result['log_path']}")
         lines = [f"  └ {' | '.join(parts)}"]
         summary = self._summarize_command_result(result)
-        if summary:
+        if result.get("log_path"):
+            lines.append(f"    top findings: {summary or 'aucun signal prioritaire detecte'}")
+            lines.append(f"    log complet: {result['log_path']}")
+        elif summary:
             lines.append(f"    resultat: {summary}")
         if result.get("error"):
             lines.append(f"    erreur: {result['error']}")

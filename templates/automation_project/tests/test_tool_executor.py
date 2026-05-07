@@ -1,6 +1,9 @@
+import os
+import time
 import unittest
 from io import StringIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from app.knowledge_store import KnowledgeStore
@@ -75,6 +78,91 @@ class ToolExecutorTests(unittest.TestCase):
         self.assertEqual(run_mock.call_count, 2)
         self.assertEqual(executor.command_permission_mode, "session")
 
+    def test_read_only_mode_allows_local_observation_without_prompt(self):
+        decisions = []
+        executor = ToolExecutor(
+            workspace=self.workspace,
+            knowledge_root=self.knowledge_root,
+            knowledge_store=self.knowledge_store,
+            permission_callback=lambda **kwargs: decisions.append(kwargs) or False,
+            command_permission_mode="read-only",
+        )
+
+        class Completed:
+            stdout = "workspace\n"
+            stderr = ""
+            returncode = 0
+
+        with patch("app.tool_executor.shutil.which", return_value="/usr/bin/pwd"):
+            with patch("app.tool_executor.subprocess.run", return_value=Completed()):
+                result = executor.execute_command("pwd", "observer le workspace")
+
+        self.assertEqual(result["stdout"], "workspace\n")
+        self.assertEqual(decisions, [])
+
+    def test_read_only_mode_blocks_pentest_or_network_command(self):
+        executor = ToolExecutor(
+            workspace=self.workspace,
+            knowledge_root=self.knowledge_root,
+            knowledge_store=self.knowledge_store,
+            permission_callback=lambda **_kwargs: True,
+            command_permission_mode="read-only",
+        )
+
+        with patch("app.tool_executor.shutil.which", return_value="/usr/bin/nmap"):
+            with self.assertRaises(ToolExecutionError) as ctx:
+                executor.execute_command("nmap 10.10.10.10", "scan")
+
+        self.assertIn("read-only", str(ctx.exception))
+
+    def test_read_only_mode_blocks_mutating_safe_command_flags(self):
+        executor = ToolExecutor(
+            workspace=self.workspace,
+            knowledge_root=self.knowledge_root,
+            knowledge_store=self.knowledge_store,
+            permission_callback=lambda **_kwargs: True,
+            command_permission_mode="read-only",
+        )
+
+        with patch("app.tool_executor.shutil.which", return_value="/usr/bin/sed"):
+            with self.assertRaises(ToolExecutionError):
+                executor.execute_command("sed -i s/a/b/g file.txt", "modifier un fichier")
+
+    def test_auto_low_risk_mode_allows_safe_command_without_prompt(self):
+        decisions = []
+        executor = ToolExecutor(
+            workspace=self.workspace,
+            knowledge_root=self.knowledge_root,
+            knowledge_store=self.knowledge_store,
+            permission_callback=lambda **kwargs: decisions.append(kwargs) or False,
+            command_permission_mode="auto-low-risk",
+        )
+
+        class Completed:
+            stdout = "ok\n"
+            stderr = ""
+            returncode = 0
+
+        with patch("app.tool_executor.shutil.which", return_value="/usr/bin/echo"):
+            with patch("app.tool_executor.subprocess.run", return_value=Completed()):
+                result = executor.execute_command("echo ok", "commande locale")
+
+        self.assertEqual(result["stdout"], "ok\n")
+        self.assertEqual(decisions, [])
+
+    def test_auto_low_risk_mode_still_prompts_for_pentest_tool(self):
+        executor = ToolExecutor(
+            workspace=self.workspace,
+            knowledge_root=self.knowledge_root,
+            knowledge_store=self.knowledge_store,
+            permission_callback=lambda **_kwargs: False,
+            command_permission_mode="auto-low-risk",
+        )
+
+        with patch("app.tool_executor.shutil.which", return_value="/usr/bin/nmap"):
+            with self.assertRaises(PermissionDenied):
+                executor.execute_command("nmap 10.10.10.10", "scan")
+
     def test_execute_command_allows_unrestricted_binary_when_no_allowlist_is_set(self):
         executor = ToolExecutor(
             workspace=self.workspace,
@@ -127,9 +215,14 @@ class ToolExecutorTests(unittest.TestCase):
                 self.returncode = 124
 
         with patch("app.tool_executor.shutil.which", return_value="/usr/bin/echo"):
-            with patch("app.tool_executor.subprocess.Popen", return_value=FakePopen()):
+            with patch("app.tool_executor.subprocess.Popen", return_value=FakePopen()) as popen_mock:
                 result = executor.execute_command("echo hello", "test")
 
+        popen_kwargs = popen_mock.call_args.kwargs
+        if os.name == "nt":
+            self.assertIn("creationflags", popen_kwargs)
+        else:
+            self.assertTrue(popen_kwargs["start_new_session"])
         self.assertEqual(result["stdout"], "alpha\nbeta\n")
         self.assertEqual(result["stderr"], "warn\n")
         self.assertTrue(Path(result["log_path"]).exists())
@@ -226,6 +319,59 @@ class ToolExecutorTests(unittest.TestCase):
         self.assertTrue(any(event.get("detail") == "/hidden (301)" for event in finding_events))
         self.assertTrue(any(event.get("detail") == "/admin (200)" for event in finding_events))
         self.assertIn("/hidden", result["stdout"])
+
+    def test_cancel_command_terminates_active_process_group_and_writes_partial_log(self):
+        with TemporaryDirectory() as tmpdir:
+            executor = ToolExecutor(
+                workspace=tmpdir,
+                knowledge_root=self.knowledge_root,
+                knowledge_store=self.knowledge_store,
+            )
+            command = "nmap 10.10.10.10"
+            log_path = Path(tmpdir) / "logs" / "partial.log"
+
+            class FakeProcess:
+                pid = 4242
+
+                def __init__(self):
+                    self.returncode = None
+
+                def poll(self):
+                    return self.returncode
+
+                def wait(self, timeout=None):
+                    self.returncode = -15
+                    return self.returncode
+
+                def kill(self):
+                    self.returncode = -9
+
+            process = FakeProcess()
+            executor._register_active_process(
+                command,
+                {
+                    "process": process,
+                    "reason": "scan",
+                    "log_path": str(log_path),
+                    "stdout_chunks": ["22/tcp open ssh\n"],
+                    "stderr_chunks": ["Stats: running\n"],
+                    "start_time": time.monotonic(),
+                    "cancel_requested": False,
+                },
+            )
+
+            if os.name == "nt":
+                result = executor.cancel_command(command)
+            else:
+                with patch("app.tool_executor.os.killpg") as killpg_mock:
+                    result = executor.cancel_command(command)
+                    killpg_mock.assert_called()
+
+            self.assertTrue(result["cancelled"])
+            self.assertTrue(Path(result["log_path"]).exists())
+            content = Path(result["log_path"]).read_text(encoding="utf-8")
+            self.assertIn("22/tcp open ssh", content)
+            self.assertIn("Commande annulee", content)
 
     def test_execute_command_reports_missing_binary(self):
         executor = ToolExecutor(

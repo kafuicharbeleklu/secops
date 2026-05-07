@@ -15,7 +15,7 @@ class TerminalRendererTests(unittest.TestCase):
         )
 
         self.assertEqual(rendered["title"], "Agent")
-        self.assertEqual(rendered["lines"], ["◦ raisonnement interne", "", "Bonjour."])
+        self.assertEqual(rendered["lines"], ["• raisonnement interne", "", "Bonjour."])
 
     def test_formats_command_activity_without_debug_labels(self):
         renderer = TerminalRenderer()
@@ -35,6 +35,22 @@ class TerminalRendererTests(unittest.TestCase):
         self.assertTrue(rendered["lines"][0].startswith("• Commande: nmap"))
         self.assertEqual(rendered["lines"].count("• Commande: nmap 10.10.10.10"), 1)
         self.assertIn("1 port ouvert.", rendered["lines"])
+
+    def test_tool_success_can_render_completion_notification(self):
+        renderer = TerminalRenderer()
+        rendered = renderer.render(
+            [
+                {
+                    "type": "tool_success",
+                    "name": "execute_command",
+                    "result": {"command": "nmap 10.10.10.10", "stdout": "", "stderr": "", "returncode": 0},
+                    "notification": "Job #1 termine: code 0",
+                },
+            ],
+            model_label="gemini-2.5-flash",
+        )
+
+        self.assertIn("  └ notification: Job #1 termine: code 0", rendered["lines"])
 
     def test_supports_partial_event_stream_without_final_answer(self):
         renderer = TerminalRenderer()
@@ -123,7 +139,7 @@ class TerminalRendererTests(unittest.TestCase):
         # dim_lines should not include blank separator or answer lines
         self.assertNotIn(2, rendered["dim_lines"])
 
-    def test_thought_uses_open_bullet_marker(self):
+    def test_thought_uses_bullet_marker(self):
         renderer = TerminalRenderer()
         rendered = renderer.render(
             [
@@ -132,7 +148,20 @@ class TerminalRendererTests(unittest.TestCase):
             model_label="gemini-2.5-flash",
         )
 
-        self.assertEqual(rendered["lines"][0], "◦ je vais scanner")
+        self.assertEqual(rendered["lines"][0], "• je vais scanner")
+
+    def test_reasoning_summary_uses_arrow_marker(self):
+        renderer = TerminalRenderer()
+        rendered = renderer.render(
+            [
+                {"type": "reasoning_summary", "content": "Analyse des ports ouverts..."},
+                {"type": "tool_start", "name": "scan_target", "args": {"target": "10.10.10.10"}},
+            ],
+            model_label="gemini-2.5-flash",
+        )
+
+        self.assertEqual(rendered["lines"][0], "→ Analyse des ports ouverts...")
+        self.assertIn(0, rendered["dim_lines"])
 
     def test_findings_event_with_preview(self):
         renderer = TerminalRenderer()
@@ -171,8 +200,61 @@ class TerminalRendererTests(unittest.TestCase):
         )
 
         self.assertEqual(rendered["tone"], "warn")
-        self.assertIn("outil bloque scan_target", rendered["lines"][0])
-        self.assertIn("action:", rendered["lines"][1])
+        self.assertEqual(rendered["lines"][0], "  ✖ ERREUR — scan_target")
+        self.assertIn("Cause      : placeholder cible detecte", rendered["lines"][1])
+        self.assertIn("Impact     : action bloquee", rendered["lines"][2])
+        self.assertIn("Action     : Definis la cible active", rendered["lines"][3])
+        self.assertIn("Retry      : non", rendered["lines"][4])
+        self.assertIn("Log complet: /view last --pager", rendered["lines"][5])
+
+    def test_tool_error_renders_structured_failure_block(self):
+        renderer = TerminalRenderer()
+        rendered = renderer.render(
+            [
+                {
+                    "type": "tool_error",
+                    "name": "execute_command",
+                    "error": "port 443 refuse (timeout 30s)",
+                    "result": {"log_path": "/tmp/secops.log"},
+                },
+            ],
+            model_label="gemini-2.5-flash",
+        )
+
+        self.assertEqual(rendered["tone"], "error")
+        self.assertEqual(rendered["lines"][0], "  ✖ ERREUR — execute_command")
+        self.assertIn("Cause      : port 443 refuse", rendered["lines"][1])
+        self.assertIn("Impact     : resultat incomplet", rendered["lines"][2])
+        self.assertIn("Action     : augmenter le timeout", rendered["lines"][3])
+        self.assertIn("Retry      : /retry last", rendered["lines"][4])
+        self.assertIn("Log complet: /tmp/secops.log", rendered["lines"][5])
+
+    def test_tool_failure_event_accepts_explicit_dataclass_payload(self):
+        from app.terminal_renderer import ToolFailure
+
+        renderer = TerminalRenderer()
+        rendered = renderer.render(
+            [
+                {
+                    "type": "tool_failure",
+                    "name": "nmap",
+                    "failure": ToolFailure(
+                        cause="port 443 refuse (timeout 30s)",
+                        impact="scan SSL incomplet",
+                        next_action="verifier le scope ou augmenter le timeout",
+                        retry=True,
+                        log_path="/tmp/nmap.log",
+                        severity="warn",
+                    ),
+                },
+            ],
+            model_label="gemini-2.5-flash",
+        )
+
+        self.assertEqual(rendered["tone"], "warn")
+        self.assertIn("Impact     : scan SSL incomplet", rendered["lines"][2])
+        self.assertIn("Action     : verifier le scope ou augmenter le timeout", rendered["lines"][3])
+        self.assertIn("Retry      : /retry last", rendered["lines"][4])
 
     def test_final_answer_separated_from_tool_output(self):
         renderer = TerminalRenderer()
@@ -226,6 +308,28 @@ class TerminalRendererTests(unittest.TestCase):
         self.assertTrue(any("duree: 3s" in line for line in rendered["lines"]))
         self.assertTrue(any("2 port(s) ouvert(s): 22/ssh, 80/http" in line for line in rendered["lines"]))
 
+    def test_command_result_shows_top_findings_and_full_log_path(self):
+        renderer = TerminalRenderer()
+        rendered = renderer.render(
+            [
+                {
+                    "type": "tool_success",
+                    "name": "execute_command",
+                    "result": {
+                        "command": "nmap 10.10.10.10",
+                        "stdout": "22/tcp open ssh OpenSSH\n",
+                        "stderr": "",
+                        "returncode": 0,
+                        "log_path": "/tmp/nmap.log",
+                    },
+                },
+            ],
+            model_label="gemini-2.5-flash",
+        )
+
+        self.assertTrue(any("top findings: 1 port(s) ouvert(s): 22/ssh" in line for line in rendered["lines"]))
+        self.assertTrue(any("log complet: /tmp/nmap.log" in line for line in rendered["lines"]))
+
     def test_command_result_summarizes_web_paths(self):
         renderer = TerminalRenderer()
         rendered = renderer.render(
@@ -272,7 +376,7 @@ class TerminalRendererTests(unittest.TestCase):
             model_label="gemini-2.5-flash",
         )
 
-        self.assertEqual(rendered["lines"], ["◦ reflexion interne", "", "Voici la reponse."])
+        self.assertEqual(rendered["lines"], ["• reflexion interne", "", "Voici la reponse."])
         self.assertIn(0, rendered["dim_lines"])
 
     def test_install_tool_result_already_installed(self):

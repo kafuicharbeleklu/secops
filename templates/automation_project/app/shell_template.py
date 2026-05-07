@@ -5,7 +5,7 @@ import re
 import shlex
 import shutil
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from colorama import Fore, Style as AnsiStyle, init
@@ -17,10 +17,14 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style as PTStyle
 
 
+def no_color_enabled():
+    return os.getenv("NO_COLOR") is not None
+
+
 if os.name == "nt":
-    init(autoreset=True, convert=True)
+    init(autoreset=True, convert=True, strip=no_color_enabled())
 else:
-    init(autoreset=True)
+    init(autoreset=True, strip=no_color_enabled())
 
 if getattr(sys.stdout, "encoding", "").lower() != "utf-8":
     try:
@@ -41,47 +45,86 @@ def safe_split(text):
 
 @dataclass(frozen=True)
 class ShellPalette:
+    theme_name: str = "dark"
+    no_color: bool = field(default_factory=no_color_enabled)
     accent_ansi: str = Fore.YELLOW
     text_ansi: str = Fore.LIGHTWHITE_EX
     muted_ansi: str = Fore.LIGHTBLACK_EX
-    info_ansi: str = Fore.YELLOW
+    info_ansi: str = Fore.LIGHTWHITE_EX
     success_ansi: str = Fore.LIGHTGREEN_EX
     warn_ansi: str = Fore.LIGHTYELLOW_EX
     error_ansi: str = Fore.LIGHTRED_EX
+    risk_ansi: str = Fore.LIGHTRED_EX
     tip_ansi: str = Fore.YELLOW
     path_ansi: str = Fore.WHITE
-    prompt_brand_hex: str = "#fdc910"
+    prompt_brand_hex: str = "#FFCD11"
     prompt_path_hex: str = "#f8fafc"
     prompt_sep_hex: str = "#6b7280"
     background_hex: str = "#111111"
     completion_meta_hex: str = "#a1a1aa"
     toolbar_text_hex: str = "#f8fafc"
     toolbar_key_fg_hex: str = "#111111"
-    toolbar_key_bg_hex: str = "#fdc910"
+    toolbar_key_bg_hex: str = "#FFCD11"
     toolbar_sep_hex: str = "#737373"
     toolbar_label_hex: str = "#f5f5f5"
     toolbar_meta_hex: str = "#d4d4d8"
+    input_bg_hex: str = "#111111"
+    selection_bg_hex: str = "#333333"
+    user_message_bg_hex: str = "#262626"
+    info_badge_bg_hex: str = "#f8fafc"
     inactive_badge_bg_hex: str = "#52525b"
-    active_badge_bg_hex: str = "#fde047"
+    active_badge_bg_hex: str = "#f59e0b"
     success_badge_bg_hex: str = "#86efac"
     danger_badge_bg_hex: str = "#b91c1c"
+    risk_badge_bg_hex: str = "#ef4444"
 
     def prompt_style_dict(self):
+        if self.no_color:
+            return {
+                "prompt.brand": "bold",
+                "prompt.path": "",
+                "prompt.sep": "",
+                "completion-menu": "",
+                "completion-menu.completion": "",
+                "completion-menu.completion.current": "bold noinherit noreverse",
+                "completion-menu.meta.completion": "",
+                "completion-menu.meta.completion.current": "bold noinherit noreverse",
+                "bottom-toolbar": "noinherit noreverse",
+                "toolbar.key": "bold",
+                "toolbar.sep": "noinherit noreverse",
+                "toolbar.label": "noinherit noreverse",
+                "toolbar.meta": "noinherit noreverse",
+                "toolbar.value.info": "noinherit noreverse",
+                "toolbar.value.success": "noinherit noreverse",
+                "toolbar.value.warn": "noinherit noreverse",
+                "toolbar.value.error": "noinherit noreverse",
+                "toolbar.value.risk": "noinherit noreverse",
+                "toolbar.value.muted": "noinherit noreverse",
+                "prompt.placeholder": "italic",
+                "input-selection": "noinherit noreverse",
+                "option": "bold",
+                "selected-option": "bold",
+                "menu.detail": "noinherit noreverse",
+                "number": "noinherit noreverse",
+            }
+
         return {
+            "": f"fg:{self.toolbar_text_hex}",
             "prompt.brand": f"fg:{self.prompt_brand_hex} bold",
             "prompt.path": f"fg:{self.prompt_path_hex}",
             "prompt.sep": f"fg:{self.prompt_sep_hex}",
+            "completion-menu": f"fg:{self.toolbar_text_hex} noinherit noreverse",
             "completion-menu.completion": (
-                f"bg:{self.background_hex} fg:{self.toolbar_text_hex}"
+                f"fg:{self.toolbar_meta_hex}"
             ),
             "completion-menu.completion.current": (
-                f"bg:{self.prompt_brand_hex} fg:{self.toolbar_key_fg_hex}"
+                f"fg:{self.prompt_brand_hex} bold noinherit noreverse"
             ),
             "completion-menu.meta.completion": (
-                f"bg:{self.background_hex} fg:{self.completion_meta_hex}"
+                f"fg:{self.toolbar_meta_hex}"
             ),
             "completion-menu.meta.completion.current": (
-                f"bg:{self.prompt_brand_hex} fg:{self.toolbar_sep_hex}"
+                f"fg:{self.prompt_brand_hex} bold noinherit noreverse"
             ),
             "bottom-toolbar": f"fg:{self.toolbar_text_hex} noinherit noreverse",
             "toolbar.key": (
@@ -90,12 +133,49 @@ class ShellPalette:
             "toolbar.sep": f"fg:{self.toolbar_sep_hex} noinherit noreverse",
             "toolbar.label": f"fg:{self.toolbar_label_hex} noinherit noreverse",
             "toolbar.meta": f"fg:{self.toolbar_meta_hex} noinherit noreverse",
-            "toolbar.value.info": f"fg:{self.toolbar_label_hex} noinherit noreverse",
+            "toolbar.value.info": f"fg:{self.info_badge_bg_hex} noinherit noreverse",
             "toolbar.value.success": f"fg:{self.success_badge_bg_hex} noinherit noreverse",
             "toolbar.value.warn": f"fg:{self.active_badge_bg_hex} noinherit noreverse",
             "toolbar.value.error": f"fg:{self.danger_badge_bg_hex} noinherit noreverse",
+            "toolbar.value.risk": f"fg:{self.risk_badge_bg_hex} noinherit noreverse",
+            "toolbar.value.muted": f"fg:{self.inactive_badge_bg_hex} noinherit noreverse",
             "prompt.placeholder": f"fg:{self.toolbar_sep_hex} italic",
+            "input-selection": f"fg:{self.toolbar_text_hex} noinherit noreverse",
+            "option": f"fg:{self.toolbar_label_hex}",
+            "selected-option": f"fg:{self.prompt_brand_hex} bold",
+            "menu.detail": f"fg:{self.toolbar_meta_hex} noinherit noreverse",
+            "number": f"fg:{self.toolbar_meta_hex}",
         }
+
+    def without_color(self):
+        return replace(
+            self,
+            no_color=True,
+            accent_ansi="",
+            text_ansi="",
+            muted_ansi="",
+            info_ansi="",
+            success_ansi="",
+            warn_ansi="",
+            error_ansi="",
+            risk_ansi="",
+            tip_ansi="",
+            path_ansi="",
+        )
+
+    def bg_ansi(self, hex_color):
+        if self.no_color:
+            return ""
+        value = str(hex_color or "").strip().lstrip("#")
+        if len(value) != 6:
+            return ""
+        try:
+            red = int(value[0:2], 16)
+            green = int(value[2:4], 16)
+            blue = int(value[4:6], 16)
+        except ValueError:
+            return ""
+        return f"\x1b[48;2;{red};{green};{blue}m"
 
     def tone_ansi(self, tone):
         return {
@@ -104,6 +184,7 @@ class ShellPalette:
             "success": self.success_ansi,
             "warn": self.warn_ansi,
             "error": self.error_ansi,
+            "risk": self.risk_ansi,
             "muted": self.muted_ansi,
             "path": self.path_ansi,
         }.get(tone, self.text_ansi)
@@ -111,10 +192,11 @@ class ShellPalette:
     def badge_colors(self, tone):
         return {
             "neutral": (self.toolbar_key_fg_hex, self.prompt_brand_hex),
-            "info": (self.toolbar_key_fg_hex, self.prompt_brand_hex),
+            "info": (self.toolbar_key_fg_hex, self.info_badge_bg_hex),
             "success": (self.toolbar_key_fg_hex, self.success_badge_bg_hex),
             "warn": (self.toolbar_key_fg_hex, self.active_badge_bg_hex),
             "error": ("#ffffff", self.danger_badge_bg_hex),
+            "risk": ("#ffffff", self.risk_badge_bg_hex),
             "muted": ("#ffffff", self.inactive_badge_bg_hex),
             "path": (self.toolbar_key_fg_hex, self.active_badge_bg_hex),
         }.get(tone, ("#ffffff", self.inactive_badge_bg_hex))
@@ -162,23 +244,34 @@ class TemplateShellCompleter(Completer):
         command_aliases,
         keyword_provider,
         keyword_commands,
+        max_results=6,
     ):
         self.command_specs = command_specs
         self.command_aliases = command_aliases
         self.keyword_provider = keyword_provider
         self.keyword_commands = set(keyword_commands)
+        self.max_results = max(1, int(max_results or 6))
 
     def _yield_command_completions(self, prefix):
-        for command, description in self.command_specs.items():
-            if command.startswith(prefix):
-                yield Completion(
-                    command,
-                    start_position=-len(prefix),
-                    display_meta=description,
-                )
+        matches = [
+            (command, description)
+            for command, description in self.command_specs.items()
+            if command.startswith(prefix)
+        ]
+        if not matches:
+            return
+        command_width = max(len(command) for command, _description in matches) + 2
+        for command, description in matches:
+            display = f"{command:<{command_width}}{description}" if description else command
+            yield Completion(
+                command,
+                start_position=-len(prefix),
+                display=display,
+            )
 
     def _yield_keyword_completions(self, prefix):
         catalog = self.keyword_provider()
+        emitted = 0
         for token, description in catalog.items():
             if token.casefold().startswith(prefix.casefold()):
                 yield Completion(
@@ -186,6 +279,9 @@ class TemplateShellCompleter(Completer):
                     start_position=-len(prefix),
                     display_meta=description,
                 )
+                emitted += 1
+                if emitted >= self.max_results:
+                    return
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor.lstrip()
@@ -231,6 +327,8 @@ class BaseTerminalShell:
         self.legacy_aliases = dict(legacy_aliases or {})
         self.tips = list(tips or [])
         self.palette = palette or ShellPalette()
+        if no_color_enabled():
+            self.palette = self.palette.without_color()
         self.keyword_completion_commands = tuple(
             keyword_completion_commands
             or ("/add", "/remove", "/find", "/run", "add", "remove", "find", "run")
@@ -253,9 +351,16 @@ class BaseTerminalShell:
             self.command_aliases,
             self.get_keyword_catalog,
             self.keyword_completion_commands,
+            max_results=max(1, self.chrome.reserve_space_for_menu - 1),
         )
         self.prompt_style = PTStyle.from_dict(self.palette.prompt_style_dict())
         self.load_state()
+
+    def apply_palette(self, palette):
+        if no_color_enabled():
+            palette = palette.without_color()
+        self.palette = palette
+        self.prompt_style = PTStyle.from_dict(self.palette.prompt_style_dict())
 
     def get_keyword_catalog(self):
         return {}
@@ -407,8 +512,6 @@ class BaseTerminalShell:
     def _semantic_line_color(self, line):
         """Return an ANSI color for a line based on its semantic content."""
         stripped = line.strip()
-        if stripped.startswith("◦ "):
-            return self.palette.muted_ansi
         if stripped.startswith("│ "):
             if "stderr:" in stripped or "erreur" in stripped:
                 return self.palette.warn_ansi
@@ -468,6 +571,21 @@ class BaseTerminalShell:
             f"{self.palette.accent_ansi}{meta}{AnsiStyle.RESET_ALL}"
         )
 
+    _CODEX_LINE_MARKERS = ("- ", "• ", "→ ", "└ ", "├ ", "│ ", "○ ", "◐ ", "● ", "◈ ")
+
+    def _codex_panel_line(self, line, *, first_content=False):
+        stripped = str(line).lstrip()
+        indent = str(line)[: len(str(line)) - len(stripped)]
+        if not stripped:
+            return str(line)
+        if stripped.startswith(self._CODEX_LINE_MARKERS):
+            return str(line)
+        if stripped.endswith(":"):
+            return str(line)
+        if first_content and stripped.endswith(".") and ":" not in stripped:
+            return str(line)
+        return f"{indent}- {stripped}"
+
     def _print_box(self, lines, width=72, tone="neutral"):
         color = self.palette.tone_ansi(tone)
         top = f"{color}╭{'─' * (width + 2)}╮{AnsiStyle.RESET_ALL}"
@@ -507,21 +625,23 @@ class BaseTerminalShell:
         self._render_last_run_meta()
         print()
 
+    @staticmethod
+    def _is_horizontal_separator_line(line):
+        stripped = str(line or "").strip()
+        return bool(stripped) and set(stripped) <= {"─"}
+
     def render_panel_state(self):
-        panel_icon = {
-            "info": "●",
-            "success": "✓",
-            "warn": "!",
-            "error": "✕",
-        }.get(self.panel.tone, "•")
         tone_color = self.palette.tone_ansi(self.panel.tone)
         if self.panel.variant == "plain":
             if not self.panel.lines:
                 return
             for line in self.panel.lines:
-                print(
-                    f"{tone_color}{self._colorize_inline(line)}{AnsiStyle.RESET_ALL}"
-                )
+                if self._is_horizontal_separator_line(line):
+                    print(line)
+                else:
+                    print(
+                        f"{tone_color}{self._colorize_inline(line)}{AnsiStyle.RESET_ALL}"
+                    )
             print()
             return
         if self.panel.variant == "transcript":
@@ -534,13 +654,7 @@ class BaseTerminalShell:
                     continue
                 line_color = self._semantic_line_color(line)
                 stripped = line.lstrip()
-                if stripped.startswith("◦ "):
-                    # Thought line — render dim without extra bullet
-                    print(
-                        f"  {line_color}{self._colorize_inline(line)}"
-                        f"{AnsiStyle.RESET_ALL}"
-                    )
-                elif stripped.startswith("• ") or stripped.startswith("└ ") or stripped.startswith("│ "):
+                if stripped.startswith("• ") or stripped.startswith("└ ") or stripped.startswith("│ "):
                     # Tool activity — keep as-is
                     print(
                         f"{line_color}{self._colorize_inline(line)}"
@@ -558,16 +672,29 @@ class BaseTerminalShell:
             if not self.panel.lines:
                 return
             for line in self.panel.lines:
-                print(
-                    f"{tone_color}{self._colorize_inline(line)}{AnsiStyle.RESET_ALL}"
-                )
+                if self._is_horizontal_separator_line(line):
+                    print(line)
+                else:
+                    print(
+                        f"{tone_color}{self._colorize_inline(line)}{AnsiStyle.RESET_ALL}"
+                    )
             print()
             return
-        print(f"{tone_color}{AnsiStyle.BRIGHT}{panel_icon} {self.panel.title}{AnsiStyle.RESET_ALL}")
+        print(f"{tone_color}{AnsiStyle.BRIGHT}• {self.panel.title}{AnsiStyle.RESET_ALL}")
+        first_content = True
         for line in self.panel.lines:
+            if not line:
+                print()
+                continue
+            if self._is_horizontal_separator_line(line):
+                print(f"  {line}")
+                first_content = False
+                continue
+            rendered_line = self._codex_panel_line(line, first_content=first_content)
+            first_content = False
             print(
-                f"  {tone_color}•{AnsiStyle.RESET_ALL} "
-                f"{self.palette.text_ansi}{self._colorize_inline(line)}{AnsiStyle.RESET_ALL}"
+                f"  {self.palette.text_ansi}{self._colorize_inline(rendered_line)}"
+                f"{AnsiStyle.RESET_ALL}"
             )
         print()
 

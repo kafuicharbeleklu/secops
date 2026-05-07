@@ -2,6 +2,7 @@ import ipaddress
 import os
 import queue
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -51,6 +52,13 @@ SAFE_DEFAULT_COMMANDS = {
     "xxd",
     "base64",
 }
+
+READ_ONLY_COMMANDS = SAFE_DEFAULT_COMMANDS
+LOW_RISK_AUTO_COMMANDS = READ_ONLY_COMMANDS
+READ_ONLY_FIND_MUTATORS = {"-delete", "-exec", "-execdir", "-ok", "-okdir"}
+READ_ONLY_SED_MUTATORS = {"-i", "--in-place"}
+READ_ONLY_SORT_MUTATORS = {"-o", "--output"}
+READ_ONLY_IP_MUTATORS = {"add", "del", "delete", "set", "replace", "flush"}
 
 ADMIN_COMMANDS = {"apt", "apt-get"}
 ADMIN_SUBCOMMAND_ALIASES = {
@@ -238,6 +246,8 @@ class ToolExecutor:
         self.authorized_scope: set[str] = set(authorized_scope or [])
         self.progress_callback = progress_callback
         self._last_command_log_path = None
+        self._active_processes = {}
+        self._active_process_lock = threading.Lock()
         self.tool_policy = ToolPolicy(placeholder_tokens=TARGET_PLACEHOLDERS)
         self._tool_plugins = load_builtin_tool_plugins(self)
 
@@ -269,7 +279,7 @@ class ToolExecutor:
             suffix += 1
         return path
 
-    def _attach_command_log(self, result):
+    def _attach_command_log(self, result, path=None):
         if not isinstance(result, dict):
             return result
         command = result.get("command", "")
@@ -277,7 +287,7 @@ class ToolExecutor:
             return result
         stdout = result.get("stdout", "") or ""
         stderr = result.get("stderr", "") or ""
-        path = self._command_log_path(command)
+        path = Path(path) if path else self._command_log_path(command)
         lines = [
             f"command: {command}",
             f"reason: {result.get('reason', '')}",
@@ -286,12 +296,94 @@ class ToolExecutor:
         if result.get("error"):
             lines.append(f"error: {result['error']}")
         lines.extend(["", "## stdout", stdout, "", "## stderr", stderr])
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join(lines), encoding="utf-8")
         result["log_path"] = str(path)
         result["stdout_lines"] = len([line for line in stdout.splitlines() if line.strip()])
         result["stderr_lines"] = len([line for line in stderr.splitlines() if line.strip()])
         self._last_command_log_path = str(path)
         return result
+
+    def _process_group_kwargs(self):
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            return {"creationflags": creationflags} if creationflags else {}
+        return {"start_new_session": True}
+
+    def _terminate_process_group(self, process, *, force=False):
+        if process is None:
+            return
+        try:
+            if process.poll() is not None:
+                return
+        except Exception:
+            pass
+        if os.name == "nt":
+            try:
+                if not force and hasattr(signal, "CTRL_BREAK_EVENT"):
+                    process.send_signal(signal.CTRL_BREAK_EVENT)
+                else:
+                    process.kill()
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    return
+        else:
+            sig = signal.SIGKILL if force else signal.SIGTERM
+            try:
+                os.killpg(process.pid, sig)
+            except ProcessLookupError:
+                return
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    return
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            if not force:
+                self._terminate_process_group(process, force=True)
+        except Exception:
+            return
+
+    def _register_active_process(self, command, info):
+        with self._active_process_lock:
+            self._active_processes[command] = info
+
+    def _active_process_info(self, command):
+        with self._active_process_lock:
+            return self._active_processes.get(command)
+
+    def _unregister_active_process(self, command):
+        with self._active_process_lock:
+            return self._active_processes.pop(command, None)
+
+    def cancel_command(self, command):
+        command = str(command or "").strip()
+        info = self._active_process_info(command)
+        if not info:
+            return {"cancelled": False, "log_path": ""}
+        info["cancel_requested"] = True
+        self._terminate_process_group(info.get("process"))
+        stdout = "".join(info.get("stdout_chunks") or [])
+        stderr = "".join(info.get("stderr_chunks") or [])
+        log_path = info.get("log_path") or ""
+        partial = self._attach_command_log(
+            {
+                "command": command,
+                "reason": info.get("reason", ""),
+                "stdout": stdout,
+                "stderr": stderr,
+                "returncode": 130,
+                "duration_seconds": int(time.monotonic() - info.get("start_time", time.monotonic())),
+                "error": "Commande annulee par l'utilisateur.",
+                "cancelled": True,
+            },
+            path=log_path or None,
+        )
+        return {"cancelled": True, "log_path": partial.get("log_path", "")}
 
     def available_tools(self):
         return tuple(
@@ -435,6 +527,57 @@ class ToolExecutor:
             "installed": installed,
             "missing": [],
         }
+
+    def _is_read_only_command(self, executable, args):
+        if executable not in READ_ONLY_COMMANDS:
+            return False
+        args = list(args or [])
+        if executable == "find":
+            return not any(arg in READ_ONLY_FIND_MUTATORS for arg in args[1:])
+        if executable == "sed":
+            return not any(
+                arg in READ_ONLY_SED_MUTATORS or arg.startswith("-i")
+                for arg in args[1:]
+            )
+        if executable == "sort":
+            return not any(arg in READ_ONLY_SORT_MUTATORS for arg in args[1:])
+        if executable == "ip":
+            return not any(arg in READ_ONLY_IP_MUTATORS for arg in args[1:])
+        return True
+
+    def _enforce_command_permission(self, *, tool_name, executable, args, details, reason):
+        mode = (self.command_permission_mode or "ask").strip().lower()
+        if mode == "session" or executable in self._session_allow_commands:
+            return
+        if mode == "read-only":
+            if self._is_read_only_command(executable, args):
+                return
+            raise ToolExecutionError(f"Commande bloquee en mode read-only: {executable}")
+        if mode == "auto-low-risk" and self._is_read_only_command(executable, args):
+            return
+
+        decision = self._request_permission(tool_name, details, reason)
+        if decision == "session":
+            self._session_allow_commands.add(executable)
+            self.command_permission_mode = "session"
+        elif decision is not True:
+            raise PermissionDenied(details)
+
+    def _enforce_admin_permission(self, *, executable, details, reason, skip_permission=False):
+        if skip_permission:
+            return
+        mode = (self.command_permission_mode or "ask").strip().lower()
+        if mode == "session" or executable in self._session_allow_commands:
+            return
+        if mode == "read-only":
+            raise ToolExecutionError("Commande admin bloquee en mode read-only.")
+
+        decision = self._request_permission("execute_admin_command", details, reason)
+        if decision == "session":
+            self._session_allow_commands.add(executable)
+            self.command_permission_mode = "session"
+        elif decision is not True:
+            raise PermissionDenied(details)
 
     def _scan_target(self, target, mode="quick"):
         """Suggestion #7: High-level scan tool that builds optimal nmap commands."""
@@ -1117,13 +1260,13 @@ class ToolExecutor:
         elif not shutil.which(executable):
             raise ToolMissingError(executable)
 
-        if self.command_permission_mode != "session" and executable not in self._session_allow_commands:
-            decision = self._request_permission("execute_command", command, reason)
-            if decision == "session":
-                self._session_allow_commands.add(executable)
-                self.command_permission_mode = "session"
-            elif decision is not True:
-                raise PermissionDenied(command)
+        self._enforce_command_permission(
+            tool_name="execute_command",
+            executable=executable,
+            args=args,
+            details=command,
+            reason=reason,
+        )
 
         try:
             executable = args[0]
@@ -1139,6 +1282,7 @@ class ToolExecutor:
                 timeout=timeout,
                 check=False,
                 shell=has_pipe,
+                **self._process_group_kwargs(),
             )
             return self._attach_command_log({
                 "command": command,
@@ -1160,6 +1304,7 @@ class ToolExecutor:
             })
 
     def _execute_command_streaming(self, args, command, reason, timeout):
+        log_path = self._command_log_path(command)
         process = subprocess.Popen(
             args,
             cwd=str(self.workspace),
@@ -1167,6 +1312,7 @@ class ToolExecutor:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            **self._process_group_kwargs(),
         )
         output_queue = queue.Queue()
         stdout_chunks = []
@@ -1187,6 +1333,18 @@ class ToolExecutor:
             "eta": "",
             "elapsed": "",
         }
+        self._register_active_process(
+            command,
+            {
+                "process": process,
+                "reason": reason,
+                "log_path": str(log_path),
+                "stdout_chunks": stdout_chunks,
+                "stderr_chunks": stderr_chunks,
+                "start_time": start_time,
+                "cancel_requested": False,
+            },
+        )
 
         self._emit_progress(
             {
@@ -1397,52 +1555,57 @@ class ToolExecutor:
             reader_threads.append(thread)
 
         timed_out = False
+        interrupted = False
 
-        while True:
-            try:
-                stream_name, chunk = output_queue.get(timeout=0.2)
-                if stream_name == "stdout":
-                    stdout_chunks.append(chunk)
-                else:
-                    stderr_chunks.append(chunk)
-                for raw_line in str(chunk).splitlines():
-                    content = raw_line.strip()
-                    if not content:
-                        continue
-                    last_output_time = time.monotonic()
-                    last_heartbeat_time = last_output_time
-                    _emit_compact(stream_name, content, force=bool(re.match(r"^\d+/(tcp|udp)\s+open\s+", content)))
-            except queue.Empty:
-                pass
+        try:
+            while True:
+                try:
+                    stream_name, chunk = output_queue.get(timeout=0.2)
+                    if stream_name == "stdout":
+                        stdout_chunks.append(chunk)
+                    else:
+                        stderr_chunks.append(chunk)
+                    for raw_line in str(chunk).splitlines():
+                        content = raw_line.strip()
+                        if not content:
+                            continue
+                        last_output_time = time.monotonic()
+                        last_heartbeat_time = last_output_time
+                        _emit_compact(stream_name, content, force=bool(re.match(r"^\d+/(tcp|udp)\s+open\s+", content)))
+                except queue.Empty:
+                    pass
 
-            now = time.monotonic()
-            if now - start_time >= timeout:
-                timed_out = True
-                process.kill()
-                break
+                now = time.monotonic()
+                if now - start_time >= timeout:
+                    timed_out = True
+                    self._terminate_process_group(process)
+                    break
 
-            if (
-                process.poll() is not None
-                and output_queue.empty()
-                and all(not thread.is_alive() for thread in reader_threads)
-            ):
-                break
+                if (
+                    process.poll() is not None
+                    and output_queue.empty()
+                    and all(not thread.is_alive() for thread in reader_threads)
+                ):
+                    break
 
-            if now - last_heartbeat_time >= heartbeat_interval and now - last_output_time >= heartbeat_interval:
-                elapsed = int(now - start_time)
-                self._emit_progress(
-                    {
-                        "type": "tool_progress",
-                        "command": command,
-                        "stream": "status",
-                        "content": f"commande toujours en cours... {elapsed}s",
-                        "tool": tool_name,
-                        "progress_kind": "heartbeat",
-                        "elapsed": elapsed,
-                        "ephemeral": True,
-                    }
-                )
-                last_heartbeat_time = now
+                if now - last_heartbeat_time >= heartbeat_interval and now - last_output_time >= heartbeat_interval:
+                    elapsed = int(now - start_time)
+                    self._emit_progress(
+                        {
+                            "type": "tool_progress",
+                            "command": command,
+                            "stream": "status",
+                            "content": f"commande toujours en cours... {elapsed}s",
+                            "tool": tool_name,
+                            "progress_kind": "heartbeat",
+                            "elapsed": elapsed,
+                            "ephemeral": True,
+                        }
+                    )
+                    last_heartbeat_time = now
+        except KeyboardInterrupt:
+            interrupted = True
+            self._terminate_process_group(process)
 
         for thread in reader_threads:
             thread.join(timeout=0.2)
@@ -1456,6 +1619,31 @@ class ToolExecutor:
 
         stdout_text = "".join(stdout_chunks)
         stderr_text = "".join(stderr_chunks)
+        active_info = self._unregister_active_process(command) or {}
+        cancel_requested = interrupted or bool(active_info.get("cancel_requested"))
+
+        if cancel_requested:
+            self._emit_progress(
+                {
+                    "type": "tool_progress",
+                    "command": command,
+                    "stream": "status",
+                    "content": "commande annulee par l'utilisateur",
+                    "tool": tool_name,
+                    "progress_kind": "warning",
+                    "detail": "commande annulee par l'utilisateur",
+                }
+            )
+            return self._attach_command_log({
+                "command": command,
+                "reason": reason,
+                "stdout": stdout_text,
+                "stderr": stderr_text,
+                "returncode": 130,
+                "duration_seconds": int(time.monotonic() - start_time),
+                "error": "Commande annulee par l'utilisateur.",
+                "cancelled": True,
+            }, path=log_path)
 
         if timed_out:
             self._emit_progress(
@@ -1478,7 +1666,7 @@ class ToolExecutor:
                 "returncode": 124,
                 "duration_seconds": int(time.monotonic() - start_time),
                 "error": f"La commande a expire apres {timeout} secondes.",
-            })
+            }, path=log_path)
 
         process.wait(timeout=1)
         return self._attach_command_log({
@@ -1488,7 +1676,7 @@ class ToolExecutor:
             "stderr": stderr_text,
             "returncode": process.returncode,
             "duration_seconds": int(time.monotonic() - start_time),
-        })
+        }, path=log_path)
 
     def execute_admin_command(self, command, reason="", *, interactive=False, skip_permission=False):
         if self.command_permission_mode == "deny":
@@ -1506,17 +1694,12 @@ class ToolExecutor:
         display_command = " ".join(normalized_args)
         executable = normalized_args[0]
 
-        if not skip_permission:
-            if (
-                self.command_permission_mode != "session"
-                and executable not in self._session_allow_commands
-            ):
-                decision = self._request_permission("execute_admin_command", display_command, reason)
-                if decision == "session":
-                    self._session_allow_commands.add(executable)
-                    self.command_permission_mode = "session"
-                elif decision is not True:
-                    raise PermissionDenied(display_command)
+        self._enforce_admin_permission(
+            executable=executable,
+            details=display_command,
+            reason=reason,
+            skip_permission=skip_permission,
+        )
 
         plan = self._build_admin_command_plan(normalized_args, interactive=interactive)
         try:

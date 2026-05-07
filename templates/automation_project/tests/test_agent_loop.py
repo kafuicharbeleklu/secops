@@ -28,6 +28,12 @@ class FakeLLMClient:
 
 
 class AgentLoopTests(unittest.TestCase):
+    def test_core_prompt_requests_codex_response_style(self):
+        self.assertIn("style Codex", AgentLoop.CORE_PROMPT)
+        self.assertIn("'• '", AgentLoop.CORE_PROMPT)
+        self.assertIn("'- '", AgentLoop.CORE_PROMPT)
+        self.assertIn("titres Markdown", AgentLoop.CORE_PROMPT)
+
     def test_exported_plan_preserves_step_status(self):
         class FakeToolExecutor:
             def __init__(self):

@@ -148,6 +148,14 @@ class JobTracker:
         self.save_state()
         return job
 
+    def cancel(self, job_id, *, result="", append_detail=None):
+        return self.update(
+            job_id,
+            status="cancelled",
+            result=result,
+            append_detail=append_detail,
+        )
+
     def recent(self, limit=10):
         return list(reversed(self._jobs[-limit:]))
 
