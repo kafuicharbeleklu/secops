@@ -113,6 +113,30 @@ root.txt
         self.assertEqual(privesc.risk, RequestRisk.EXPLOIT)
         self.assertEqual(privesc.user_intent, UserIntent.ANSWER_QUESTION)
 
+    def test_pure_greeting_is_social_and_suppresses_followups(self):
+        for greeting in ("bonjour", "salut !", "hello there", "hey", "merci beaucoup"):
+            decision = classify_request(greeting)
+            self.assertEqual(
+                decision.user_intent, UserIntent.SOCIAL, msg=greeting
+            )
+            self.assertEqual(
+                decision.technical_goal, TechnicalGoal.UNKNOWN, msg=greeting
+            )
+            self.assertTrue(decision.should_suppress_followups, msg=greeting)
+
+    def test_greeting_prefix_on_real_task_is_not_social(self):
+        decision = classify_request("Salut, fais un scan des ports sur 10.0.0.5")
+
+        self.assertEqual(decision.technical_goal, TechnicalGoal.PORT_SCAN)
+        self.assertEqual(decision.user_intent, UserIntent.RUN_SINGLE_TOOL)
+        self.assertFalse(decision.should_suppress_followups)
+
+    def test_social_token_inside_word_does_not_trigger_small_talk(self):
+        # 'hi' lives inside 'this'/'which' — token matching must not fire.
+        decision = classify_request("Which of this server's ports respond?")
+
+        self.assertNotEqual(decision.user_intent, UserIntent.SOCIAL)
+
 
 if __name__ == "__main__":
     unittest.main()

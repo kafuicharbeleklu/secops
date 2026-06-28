@@ -33,6 +33,7 @@ class TechnicalGoal(str, Enum):
 
 class UserIntent(str, Enum):
     UNKNOWN = "unknown"
+    SOCIAL = "social"
     ANSWER_QUESTION = "answer_question"
     RUN_SINGLE_TOOL = "run_single_tool"
     PROPOSE_PLAN = "propose_plan"
@@ -74,8 +75,12 @@ class RequestDecision:
 
     @property
     def should_suppress_followups(self) -> bool:
-        """Return true for narrow answer turns where proposals would add noise."""
-        return self.user_intent == UserIntent.ANSWER_QUESTION
+        """Return true for narrow answer turns where proposals would add noise.
+
+        Covers focused factual questions and pure social turns (greetings,
+        thanks): in both cases tool suggestions would be off-topic noise.
+        """
+        return self.user_intent in (UserIntent.ANSWER_QUESTION, UserIntent.SOCIAL)
 
     def to_context(self) -> dict[str, str | bool]:
         return {
@@ -480,12 +485,63 @@ def _technical_goal(text: str) -> TechnicalGoal:
     return TechnicalGoal.UNKNOWN
 
 
+_SOCIAL_WORDS = frozenset(
+    {
+        "bonjour",
+        "bonsoir",
+        "salut",
+        "coucou",
+        "hello",
+        "hi",
+        "hey",
+        "yo",
+        "merci",
+        "thanks",
+        "thx",
+        "ciao",
+        "bye",
+    }
+)
+
+_SOCIAL_PHRASES = (
+    "thank you",
+    "comment vas",
+    "how are you",
+    "good morning",
+    "good evening",
+    "good afternoon",
+    "bonne journee",
+    "bonne soiree",
+    "au revoir",
+    "a plus",
+    "ca va",
+)
+
+
+def _is_social(text: str) -> bool:
+    """Pure greeting/courtesy turn with no technical task attached.
+
+    Token matching (not substring) avoids false hits like 'hi' inside 'this'.
+    A short length cap keeps a greeting prefix on a real task ('salut, scanne
+    10.0.0.5 en profondeur') from being misread as small talk.
+    """
+    tokens = re.findall(r"[a-z']+", text)
+    if not tokens or len(tokens) > 8:
+        return False
+    if any(token in _SOCIAL_WORDS for token in tokens):
+        return True
+    return _contains_any(text, _SOCIAL_PHRASES)
+
+
 def _user_intent(text: str, technical_goal: TechnicalGoal) -> UserIntent:
     if re.fullmatch(r"(?:#?\d+[\s,;]*)+", text) or re.fullmatch(
         r"(?:all|tout|tous|toutes)(?:\s+(?:except|sauf)\s+.+)?",
         text,
     ):
         return UserIntent.EXECUTE_SELECTED
+
+    if technical_goal == TechnicalGoal.UNKNOWN and _is_social(text):
+        return UserIntent.SOCIAL
 
     guided_batch_markers = (
         "answer the questions below",
