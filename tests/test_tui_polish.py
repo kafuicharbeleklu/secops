@@ -100,6 +100,7 @@ try:
         build_tools_view_lines,
         normalize_agent_markdown,
         _build_expanded_tool_result_lines,
+        _build_collapsed_tool_result_lines,
     )
     from secops_agent.ui.session_review import build_artifact_text, build_trajectory_text
     from secops_agent.ui.sudo_prompt import request_sudo_authentication
@@ -2758,18 +2759,49 @@ class TUIPolishTests(unittest.TestCase):
 
         normalized = normalize_agent_markdown(text)
 
-        self.assertNotIn("# Analyse", normalized)
+        # h1 is downgraded to a left-aligned h2 heading; h2 is preserved as a
+        # real heading (structure), not flattened to inline bold.
+        self.assertIn("## Analyse", normalized)
+        self.assertIn("## Actions", normalized)
         self.assertNotIn("---", normalized)
-        self.assertIn("**Analyse**", normalized)
-        self.assertIn("**Actions**", normalized)
         self.assertNotIn("\n\n\n", normalized)
+
+    def test_collapsed_tool_result_leads_with_parsed_summary(self):
+        from secops_agent.core.tools import ToolResult
+
+        result = ToolResult(
+            success=True,
+            output=(
+                "Starting Nmap 7.94\n"
+                "Nmap scan report for 10.10.10.5\n"
+                "22/tcp open ssh\n80/tcp open http\n443/tcp open https\n"
+            ),
+            execution_time=1.2,
+            metadata={"parsed_summary": "3 service(s) on 10.10.10.5 (Linux)"},
+        )
+
+        lines = _build_collapsed_tool_result_lines(result, width=88)
+        text = "\n".join(lines)
+
+        # The fold leads with the structured key fact, not the raw banner head.
+        self.assertIn("3 service(s) on 10.10.10.5 (Linux)", lines[0])
+        self.assertNotIn("Starting Nmap", lines[0])
+        self.assertIn("ctrl+o to expand", text)
+
+    def test_agent_markdown_normalization_flattens_deep_headings(self):
+        text = "#### Sous-detail\ntexte"
+
+        normalized = normalize_agent_markdown(text)
+
+        self.assertIn("**Sous-detail**", normalized)
+        self.assertNotIn("#### Sous-detail", normalized)
 
     def test_agent_markdown_normalization_preserves_code_fences(self):
         text = "# Commande\n```markdown\n# garder ce titre\n---\n```\n"
 
         normalized = normalize_agent_markdown(text)
 
-        self.assertIn("**Commande**", normalized)
+        self.assertIn("## Commande", normalized)
         self.assertIn("# garder ce titre", normalized)
         self.assertIn("---", normalized)
 

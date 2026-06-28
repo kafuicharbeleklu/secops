@@ -2289,6 +2289,12 @@ class SecOpsAgent:
                         state_changes=state_changes,
                         suggested_actions=pending_suggestions,
                     )
+                # P3: carry the parsed structured summary to the renderer so the
+                # collapsed (Ctrl+O) view leads with the key fact ("3 services on
+                # 10.10.10.5") instead of the raw output head.
+                parsed_summary = str(getattr(parsed_result, "summary", "") or "").strip()
+                if parsed_summary and isinstance(getattr(res, "metadata", None), dict):
+                    res.metadata.setdefault("parsed_summary", parsed_summary)
                 yield ToolResultEvent(name=tc.name, result=res, id=tc.id)
                 if local_preflight_turn and res.success:
                     answer_summary = self._format_tool_answer_summary(

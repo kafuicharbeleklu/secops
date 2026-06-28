@@ -203,6 +203,28 @@ def _build_collapsed_tool_result_lines(result: Any, *, width: int) -> list[str]:
             max_width=max(24, min(120, width - 8)),
         )
         elapsed = format_duration(getattr(result, "execution_time", 0.0)) if getattr(result, "execution_time", 0.0) > 0 else ""
+
+        # P3: when the agent attached a parsed structured summary, lead the
+        # collapsed view with that key fact instead of the raw output head.
+        metadata = getattr(result, "metadata", None)
+        parsed_summary = ""
+        if isinstance(metadata, dict):
+            parsed_summary = str(metadata.get("parsed_summary") or "").strip()
+        if parsed_summary:
+            headline = _fit_cell(parsed_summary.splitlines()[0], max(20, width - 8))
+            lines = [
+                f"  [{COLORS['text_muted']}]⎿  {escape(headline)}[/{COLORS['text_muted']}]"
+                f" [{COLORS['text_dim']}](ctrl+o to expand)[/{COLORS['text_dim']}]"
+            ]
+            for line in summary["lines"][:2]:
+                if line.strip() and line.strip() != headline.strip():
+                    lines.append(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]")
+            if summary["hidden_lines"]:
+                lines.append(
+                    f"     [{COLORS['text_dim']}]... {summary['hidden_lines']:,} more lines hidden[/{COLORS['text_dim']}]"
+                )
+            return lines
+
         use_single_line = (
             summary["visible_lines"] == 1
             and summary["hidden_lines"] == 0
@@ -430,15 +452,24 @@ def normalize_agent_markdown(text: str) -> str:
         heading = _MARKDOWN_HEADING_RE.match(line)
         if heading:
             ordered_next = None
+            level = len(heading.group(1))
             title = heading.group(2).strip()
             if title:
-                normalized.append(f"**{title}**")
+                # Keep h2/h3 as real (left-aligned, accented) headings for
+                # structure; downgrade a heavy centred h1 to h2; flatten deep
+                # h4+ to bold to avoid noisy micro-headers.
+                if level <= 1:
+                    normalized.append(f"## {title}")
+                elif level <= 3:
+                    normalized.append(f"{'#' * level} {title}")
+                else:
+                    normalized.append(f"**{title}**")
             continue
 
         next_line = lines[index + 1] if index + 1 < len(lines) else ""
         if stripped and _MARKDOWN_SETEXT_RE.match(next_line.strip()):
             ordered_next = None
-            normalized.append(f"**{stripped}**")
+            normalized.append(f"## {stripped}")
             skip_next = True
             continue
 

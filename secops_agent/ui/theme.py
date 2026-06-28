@@ -55,6 +55,11 @@ RICH_STYLES = {
     "markdown.code": f"bold {COLORS['accent_bright']}",
     "markdown.code_block": COLORS["text"],
     "markdown.strong": f"bold {COLORS['accent_bright']}",
+    # Section headers in agent answers: left-aligned (Rich default for h2+),
+    # accented so structure reads as titles, not flat bold.
+    "markdown.h1": f"bold {COLORS['accent_bright']}",
+    "markdown.h2": f"bold {COLORS['accent']}",
+    "markdown.h3": f"bold {COLORS['accent']}",
 }
 
 rich_theme = Theme(RICH_STYLES)

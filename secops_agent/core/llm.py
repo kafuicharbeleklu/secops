@@ -64,9 +64,12 @@ SECOPS_SYSTEM_INSTRUCTION = (
     "- Detect the OS locally (`sysinfo`) instead of asking. For sudo, rely on the permission flow; "
     "if non-interactive or auth fails, give the exact manual command instead of retrying blindly.\n\n"
 
-    "## Format\n"
-    "- Terminal Markdown. `backticks` for commands/paths/ports/tools; **bold** only for critical "
-    "outcomes. Tables for structured data. Numbered lists as `1. Item`. Emoji as sparse anchors only.\n"
+    "## Format — make the answer scannable\n"
+    "- Put every concrete value in `code`: IPs, ports, paths, URLs, CVEs, service/version, flags, filenames.\n"
+    "- **Bold** the verdict and any severity word: **open**, **vulnerable**, **CRITICAL**, **active**, **failed**.\n"
+    "- Use `##` headers to separate sections in longer findings; skip headers for one-line replies.\n"
+    "- Tables for structured data (ports, services, findings). Numbered lists as `1. Item`.\n"
+    "- Emoji only as sparse anchors (🎯 ✅ ❌ ⚠️ 🚨 🔑 🏁). Never leave a key fact as flat prose.\n"
 )
 
 @dataclass
@@ -220,8 +223,9 @@ class GeminiProvider:
                 "- Do not expose hidden reasoning or thoughts.\n"
                 "- Do not restate the user's task or request.\n"
                 "- Keep numbered lists in `1. Item` format.\n"
-                "- Use bold sparingly, only when the term carries a critical conclusion or action.\n"
-                "- Avoid decorative headings."
+                "- Emphasise key facts: `code` for values (IPs, ports, paths, CVEs, versions), "
+                "**bold** for the verdict and severity words.\n"
+                "- Use `##` headers to separate sections in longer answers; omit them for one-line replies."
             )
             parts.append(contract)
         elif profile.name == "gemma" or profile.name.startswith("gemma"):
@@ -231,7 +235,8 @@ class GeminiProvider:
                 "- You are part of elite Security Operations.\n"
                 "- Use tools only when they materially improve accuracy.\n"
                 "- Keep numbered lists in `1. Item` format.\n"
-                "- Use bold sparingly, only when the term carries a critical conclusion or action."
+                "- Emphasise key facts: `code` for values (IPs, ports, paths, CVEs, versions), "
+                "**bold** for the verdict and severity words."
             )
             parts.append(contract)
 

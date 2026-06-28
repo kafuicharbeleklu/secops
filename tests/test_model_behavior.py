@@ -62,8 +62,8 @@ class ModelBehaviorTests(unittest.TestCase):
         self.assertIn("same concise terminal-agent interaction style", instruction)
         self.assertIn("Do not expose hidden reasoning", instruction)
         self.assertIn("Do not restate the user's task", instruction)
-        self.assertIn("Use bold sparingly", instruction)
-        self.assertIn("Avoid decorative headings", instruction)
+        self.assertIn("Emphasise key facts", instruction)
+        self.assertIn("`code` for values", instruction)
         self.assertIn("A closed question gets one direct line", instruction)
         self.assertIn("dump Mission State", instruction)
 
@@ -75,7 +75,7 @@ class ModelBehaviorTests(unittest.TestCase):
         self.assertIn("same concise terminal-agent interaction style", instruction)
         self.assertIn("elite Security Operations", instruction)
         self.assertIn("Use tools only when they materially improve accuracy", instruction)
-        self.assertIn("Use bold sparingly", instruction)
+        self.assertIn("Emphasise key facts", instruction)
 
     def test_gemma_user_message_is_not_rewritten_by_model_adapter(self):
         provider = GeminiProvider(api_key="", model_name="gemma")
