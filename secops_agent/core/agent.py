@@ -776,6 +776,32 @@ class SecOpsAgent:
             return self.autonomy
         return AutonomyPolicy.for_environment(decision.environment_hint)
 
+    def _relevant_lessons_briefing(self, mission: Any) -> str:
+        """Prime the model with relevant prior lessons (memory briefing, §5).
+
+        Silent mission-context injection (not a user-facing block), gated to
+        lessons that actually match the current mission so it adds nothing when
+        none apply. The set of matches naturally enriches as the mission accrues
+        evidence across turns.
+        """
+        store = self.experience_store
+        if mission is None or store is None or not hasattr(store, "retrieve"):
+            return ""
+        try:
+            scored = store.retrieve(mission, limit=3)
+        except Exception:
+            logger.debug("Lesson retrieval for briefing failed", exc_info=True)
+            return ""
+        if not scored:
+            return ""
+        lines = ["## Relevant Prior Lessons (hints from past authorized engagements)"]
+        for lesson, _score in scored:
+            tool = str(getattr(lesson, "action_tool_name", "") or "").strip()
+            suffix = f" [{tool}]" if tool else ""
+            lines.append(f"- {lesson.reason()}{suffix}")
+        lines.append("Treat these as hints only; verify against current evidence.")
+        return "\n".join(lines)
+
     def _tools_schema_for_decision(self, decision: RequestDecision) -> list[dict[str, Any]]:
         # AutonomyPolicy (§7): withhold exploitation/destructive tool schemas
         # until the user has approved a plan. The PermissionEngine still gates
@@ -1490,8 +1516,12 @@ class SecOpsAgent:
                 llm_context["phase_reason"] = getattr(mission, "phase_reason", "")
                 llm_context["findings_count"] = len(mission.findings)
                 llm_context["blocked_reason"] = "; ".join(mission.blocked_reasons[-3:]) if mission.blocked_reasons else ""
-            # Inject structured context into system prompt
+            # Inject structured context into system prompt, primed with any
+            # relevant prior lessons (memory briefing).
             ctx_str = sm.build_context_for_llm(include_conversation=False)
+            briefing = self._relevant_lessons_briefing(mission)
+            if briefing:
+                ctx_str = f"{ctx_str}\n\n{briefing}" if ctx_str else briefing
             if ctx_str and hasattr(self.llm, "set_mission_context"):
                 self.llm.set_mission_context(ctx_str)
 

@@ -390,6 +390,108 @@ class SafeBaselineToolExposureTests(unittest.TestCase):
         self.assertEqual(agent._tools_schema_for_decision(decision), [])
 
 
+class _FakeLessonStore:
+    def __init__(self, scored):
+        self._scored = scored
+
+    def retrieve(self, mission, limit=3):
+        return self._scored[:limit]
+
+
+class _RecordingContextLLM:
+    model_name = "recorder"
+
+    def __init__(self):
+        self.mission_context = ""
+
+    def prepare_for_prompt(self, prompt: str, **kwargs):
+        pass
+
+    def set_mission_context(self, context: str):
+        self.mission_context = context
+
+    async def stream_chat(self, messages, tools_schema=None):
+        yield StreamChunk(content="ok")
+
+
+class MemoryBriefingTests(unittest.TestCase):
+    """Memory briefing (§5): prime the model with relevant prior lessons."""
+
+    def _lesson(self):
+        from secops_agent.core.experience import CaseLesson
+
+        return CaseLesson(
+            title="Apache upload panel needed an extension filtering check",
+            outcome="success",
+            action_tool_name="http_request",
+            review_status="reviewed",
+            confidence=0.8,
+        )
+
+    def _agent(self, store):
+        return SecOpsAgent(
+            CapturingLLM(),
+            _registry_with_tools("nmap_scan"),
+            ConversationMemory(),
+            permissions=PermissionEngine(),
+            experience_store=store,
+        )
+
+    def test_briefing_lists_matching_lessons(self):
+        from secops_agent.core.mission import MissionContext
+
+        agent = self._agent(_FakeLessonStore([(self._lesson(), 0.5)]))
+        text = agent._relevant_lessons_briefing(MissionContext(name="m"))
+
+        self.assertIn("Relevant Prior Lessons", text)
+        self.assertIn("extension filtering", text)
+        self.assertIn("[http_request]", text)
+
+    def test_briefing_is_silent_without_matches(self):
+        from secops_agent.core.mission import MissionContext
+
+        agent = self._agent(_FakeLessonStore([]))
+        self.assertEqual(agent._relevant_lessons_briefing(MissionContext(name="m")), "")
+
+    def test_briefing_empty_without_store(self):
+        from secops_agent.core.mission import MissionContext
+
+        agent = SecOpsAgent(
+            CapturingLLM(),
+            _registry_with_tools("nmap_scan"),
+            ConversationMemory(),
+            permissions=PermissionEngine(),
+        )
+        self.assertEqual(agent._relevant_lessons_briefing(MissionContext(name="m")), "")
+
+    def test_briefing_reaches_mission_context_during_a_turn(self):
+        import asyncio
+
+        from secops_agent.core.mission import MissionContext
+        from secops_agent.core.structured_memory import StructuredMemory
+
+        memory = ConversationMemory()
+        mission = MissionContext(name="briefing mission")
+        structured = StructuredMemory(conversation=memory, mission=mission)
+        llm = _RecordingContextLLM()
+        agent = SecOpsAgent(
+            llm,
+            _registry_with_tools("nmap_scan"),
+            memory,
+            permissions=PermissionEngine(),
+            structured_memory=structured,
+            experience_store=_FakeLessonStore([(self._lesson(), 0.5)]),
+        )
+
+        async def run():
+            async for _ in agent.stream_response("scan the box"):
+                pass
+
+        asyncio.run(run())
+        self.assertIn("Relevant Prior Lessons", llm.mission_context)
+        self.assertIn("extension filtering", llm.mission_context)
+
+
 class EnvironmentAwareAutonomyTests(unittest.TestCase):
     """Chantier 2: autonomy adapts per turn to the detected environment."""
 
