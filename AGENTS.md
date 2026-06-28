@@ -20,9 +20,7 @@ Use 4-space indentation, standard Python naming (`snake_case` for functions and 
 
 ## Testing Guidelines
 
-The `tests/` directory holds ~33 `unittest`-style modules (`test_*.py`). Run them with `python -m unittest discover -s tests`. Add focused tests as `tests/test_*.py`. Mock LLM calls, network probes, and shell command execution for unit tests. Reserve `secops_agent/test_agent_run.py` for manual live verification with real credentials and authorized targets only.
-
-Known baseline: ~19 TUI-parity tests in `test_tui_polish.py` currently fail on glyph/spacing drift and need triage (renderer vs. stale assertions). The CI test job is non-blocking until this is resolved; see `docs/ARCHITECTURE.md` §8.
+The `tests/` directory holds ~33 `unittest`-style modules (`test_*.py`). Run them with `python -m unittest discover -s tests`. The suite is green (one `@unittest.expectedFailure` tracks pending AutonomyPolicy work — see `docs/ARCHITECTURE.md` §8). Add focused tests as `tests/test_*.py`. Mock LLM calls, network probes, and shell command execution for unit tests. Reserve `secops_agent/test_agent_run.py` for manual live verification with real credentials and authorized targets only.
 
 ## Commit & Pull Request Guidelines
 

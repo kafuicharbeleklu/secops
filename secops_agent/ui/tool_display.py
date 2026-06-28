@@ -268,6 +268,10 @@ def _tool_status_color(status: str = "", permission: str = "", is_dangerous: boo
 
 
 def _tool_status_marker(status: str = "", permission: str = "", is_dangerous: bool = False) -> str:
+    # agy convention (verified against the official hands-on transcript): tool
+    # rows always use a SOLID circle "●". State is encoded by COLOUR, not by the
+    # glyph — yellow while pending/running, green on success, red on error — with
+    # an animated spinner shown separately during active execution.
     return "●"
 
 
@@ -466,22 +470,32 @@ def _approval_lines(
 
 
 def _approval_options(resource: PermissionResource) -> list[tuple[str, str]]:
-    """Permission choices with descriptive labels (⚠️ §5.1)."""
-    options = []
-    options.append(("ALLOW_ONCE", "Allow once"))
+    """Permission choices with descriptive labels (⚠️ §5.1).
+
+    DELIBERATE SECOPS DIVERGENCE FROM AGY (R11): Antigravity itself offers
+    "Always Allow / Persist" for every command and relies on a separate
+    ``alwaysDeny`` list for safety. For an offensive-security agent that is
+    considered too risky, so this hybrid policy only offers "Persist to
+    settings.json" for low-risk resources. Sensitive tools
+    (``_SHELL_TOOL_SESSION_ONLY``), exact commands, and non-low-risk command
+    prefixes stay session-only; compound commands keep no "always allow" scope
+    at all — only allow-once/deny. This is intentionally stricter than agy.
+    """
+    options = [("ALLOW_ONCE", "Allow once")]
 
     if resource.kind == "tool":
         options.append(("ALLOW_SESSION", f"Always allow tool '{resource.name}' in this conversation"))
-        options.append(("ALLOW_PERSISTENT", f"Always allow tool '{resource.name}' (Persist to settings.json)"))
+        if resource.name not in _SHELL_TOOL_SESSION_ONLY:
+            options.append(("ALLOW_PERSISTENT", f"Always allow tool '{resource.name}' (Persist to settings.json)"))
     elif resource.kind == "command_exact":
-        options.append(("ALLOW_SESSION", "Always allow this command in this conversation"))
-        options.append(("ALLOW_PERSISTENT", "Always allow this command (Persist to settings.json)"))
+        if not _is_compound_command(resource.name):
+            options.append(("ALLOW_SESSION", "Always allow this command in this conversation"))
     elif resource.kind == "command_prefix":
         options.append(("ALLOW_SESSION", f"Always allow commands matching '{resource.name}' in this conversation"))
-        options.append(("ALLOW_PERSISTENT", f"Always allow commands matching '{resource.name}' (Persist to settings.json)"))
+        if _allows_persistent_command_prefix(resource.name):
+            options.append(("ALLOW_PERSISTENT", f"Always allow commands matching '{resource.name}' (Persist to settings.json)"))
     else:
         options.append(("ALLOW_SESSION", f"Always allow '{resource.name}' in this conversation"))
-        options.append(("ALLOW_PERSISTENT", f"Always allow '{resource.name}' (Persist to settings.json)"))
 
     options.append(("DENY_ONCE", "No"))
     return options
@@ -591,7 +605,7 @@ class ToolCallBox:
         )
         prefix = "\n" if leading_blank else ""
         console.print(
-            f"{prefix}[{indicator_color}]○[/{indicator_color}] "
+            f"{prefix}[{indicator_color}]●[/{indicator_color}] "
             f"{call_markup}"
             f"{expand_tag}",
             no_wrap=True,

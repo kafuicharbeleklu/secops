@@ -1109,13 +1109,15 @@ Nmap done: 1 IP address (0 hosts up) scanned in 2.26 seconds
         renderer._render_suggested_actions([action])
         output = renderer.console.export_text()
 
+        # §5 concise argued-suggestion format: a single "Lesson:" reason per
+        # suggestion. The verbose "Match:" / "Missing:" learning internals are
+        # intentionally not surfaced to the user.
         self.assertIn("Suggested next actions:", output)
         self.assertIn("Lesson:", output)
         self.assertIn("similar prior success", output)
         self.assertIn("extension filtering check", output)
-        self.assertIn("Match: same method: upload_surface_validation, endpoint: /panel", output)
-        compact_output = " ".join(output.split())
-        self.assertIn("Missing: user approval still required", compact_output)
+        self.assertNotIn("Match:", output)
+        self.assertNotIn("Missing:", output)
 
 
 class ExperienceAgentTests(unittest.IsolatedAsyncioTestCase):

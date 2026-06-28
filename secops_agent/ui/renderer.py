@@ -375,9 +375,11 @@ def _build_tool_transcript_block_lines(
         if show_expand_tag else ""
     )
     if result is None:
+        # agy: tool rows are always a solid ● — running state is shown by colour
+        # (yellow) and the spinner, not by an empty circle.
         indicator_color = _tool_status_color(status="running")
         return [
-            f"[{indicator_color}]○[/{indicator_color}] {call_markup}{expand_suffix}"
+            f"[{indicator_color}]●[/{indicator_color}] {call_markup}{expand_suffix}"
         ]
 
     indicator_color = _tool_status_color(status=_tool_result_status(result))
@@ -1730,15 +1732,15 @@ def _compact_agent_error(message: str) -> str:
     lowered = text.casefold()
 
     if "resource_exhausted" in lowered or "429" in lowered:
-        # ✅ Verified agy wording.  Try to extract a reset/retry-after hint
-        # from the raw error text (some providers include seconds or a
-        # timestamp).
+        # ✅ Verified agy wording (Antigravity surfaces 429/quota saturation as a
+        # high-traffic notice). Try to extract a reset/retry-after hint from the
+        # raw error text (some providers include seconds or a timestamp).
         reset_hint = _extract_reset_seconds(text)
         if reset_hint is not None:
             h, rem = divmod(int(reset_hint), 3600)
             m, s = divmod(rem, 60)
-            return f"Individual quota reached. Contact your administrator to enable overages. Resets in {h}h{m}m{s}s."
-        return "Individual quota reached. Contact your administrator to enable overages."
+            return f"Our servers are experiencing high traffic right now. Try again in {h}h{m}m{s}s."
+        return "Our servers are experiencing high traffic right now, please try again in a minute."
     if "api_key" in lowered or "api key" in lowered or "gemini_api_key" in lowered:
         return "GEMINI_API_KEY is missing or invalid. Configure it, then try again."
     if "permission_denied" in lowered or "403" in lowered:
@@ -4433,10 +4435,14 @@ class Renderer:
 
         self.console.print()
 
-        # agy format: just "Thought for Xs" — no ▸ prefix, no content preview
+        # agy format: "▸ Thought for Xs" with a brief content preview.
+        # (Real Antigravity transcripts render e.g. "▸ Thought for 2s … <summary>".)
         self.console.print(
+            f"[{COLORS['accent']}]▸[/{COLORS['accent']}] "
             f"[{COLORS['text_muted']}]Thought for {duration}s[/{COLORS['text_muted']}]"
         )
+        if self._latest_thought_content:
+            self._print_wrapped_muted_lines(self._latest_thought_content, indent="  ")
 
         self._thinking_start = None
         self._thinking_content = ""
@@ -4509,11 +4515,11 @@ class Renderer:
     def _render_suggested_actions(self, actions: list[Any]) -> None:
         """Render numbered suggestion list.
 
-        Bug 2.2 fixes applied:
-        - Verbose ``Lesson:`` / ``Match:`` / ``Missing:`` blocks are hidden by
-          default.  They are internal learning metadata, not actionable for the
-          user.
-        - The clean display keeps: title, tool_name, target/arg, and risk.
+        Per architecture §5 (argued suggestions), each item carries a concise
+        ``Lesson:`` reason drawn from cross-mission experience so the agent
+        explains *why* it proposes an action. The verbose ``Match:`` / ``Missing:``
+        learning internals stay hidden. The ``show_experience`` display
+        preference (default on) can suppress the reason line.
         """
         if not actions:
             return
@@ -4542,9 +4548,18 @@ class Renderer:
             detail = f" [{COLORS['text_muted']}]· {escape(' · '.join(detail_parts))}[/{COLORS['text_muted']}]" if detail_parts else ""
             title = escape(str(getattr(action, "title", "") or "Next action"))
             self.console.print(f"  {index}. [{COLORS['text']}]{title}[/{COLORS['text']}]{detail}")
-            # Bug 2.2: Lesson:/Match:/Missing: verbose blocks are hidden.
-            # The experience data is still available in the planner's action
-            # objects for debugging, but not shown to the end-user.
+            # §5: one concise experience reason per suggestion; verbose
+            # Match:/Missing: learning internals stay hidden.
+            if self._display_prefs.get("show_experience", True):
+                experience = [
+                    str(item).strip()
+                    for item in (getattr(action, "experience", []) or [])
+                    if str(item).strip()
+                ]
+                if experience:
+                    self.console.print(
+                        f"     [{COLORS['text_muted']}]Lesson: {escape(experience[0])}[/{COLORS['text_muted']}]"
+                    )
         self.console.print(f"  [{COLORS['text_muted']}]Reply with a number or describe what to do next.[/{COLORS['text_muted']}]")
 
     # ── Agent Stream Rendering ────────────────────────────────────────
@@ -4923,15 +4938,16 @@ class Renderer:
                     elif keep_result_expanded and bool(getattr(self.console, "is_terminal", False)):
                         self._latest_transcript_expanded = True
                     elif not had_pending_call or pending_call_cleared:
-                        # ✅ agy grouping: suppress (ctrl+o) on the ● line
-                        # because the ⎿ result line below already carries it.
+                        # ✅ agy grouping: suppress (ctrl+o) on the ● line when the
+                        # ⎿ result summary below carries it. Error results render
+                        # inline without that affordance, so the ● line keeps it.
                         ToolCallBox.render(
                             self.console,
                             event.name,
                             self._latest_tool_arguments,
                             status=result_status,
                             leading_blank=False,
-                            show_expand_tag=False,
+                            show_expand_tag=(result_status == "error"),
                         )
                     if not keep_result_expanded:
                         ToolResultBox.render(self.console, event.name, event.result)

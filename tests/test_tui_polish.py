@@ -3170,14 +3170,17 @@ class TUIPolishTests(unittest.TestCase):
         self.assertNotIn("⚠", output)
         self.assertNotIn("ask", output)
 
-    def test_tool_call_pending_row_uses_open_circle(self):
+    def test_tool_call_row_uses_filled_circle_like_agy(self):
+        # Verified against the official agy hands-on transcript: tool rows always
+        # use a solid ● circle. State is encoded by colour + spinner, never by an
+        # empty ○ glyph.
         console = Console(width=88, record=True, force_terminal=False, file=io.StringIO())
 
         ToolCallBox.render(console, "run_shell", {"command": "pwd"})
         output = console.export_text()
 
-        self.assertIn("○ Bash(pwd) (ctrl+o to expand)", output)
-        self.assertNotIn("● Bash(pwd)", output)
+        self.assertIn("● Bash(pwd) (ctrl+o to expand)", output)
+        self.assertNotIn("○ Bash(pwd)", output)
 
     def test_tool_call_running_row_uses_full_neutral_circle(self):
         console = Console(width=88, record=True, force_terminal=False, file=io.StringIO())

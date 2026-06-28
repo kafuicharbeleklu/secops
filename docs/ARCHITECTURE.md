@@ -267,3 +267,25 @@ de l'**explicitation** et de la **découpe**. Ordre recommandé :
 
 > Principe : **0 et 1 avant tout refactor** ; ensuite, un chantier à la fois,
 > tests verts entre chaque.
+
+### Décisions de parité TUI actées
+
+- **Glyphe des lignes outil** : toujours `●` (plein) ; l'état est encodé par la
+  **couleur** (jaune pending/running, vert succès, rouge erreur) + un **spinner**
+  pendant l'exécution. Vérifié sur le transcript officiel agy (codelab). Pas
+  d'état `○` vide.
+- **Politique d'approbation R11** (`_approval_options`) : **divergence sécurité
+  volontaire**. agy offre « Always Allow / Persist » pour tout et sécurise via
+  une liste `alwaysDeny` ; pour un agent offensif, « Persist to settings.json »
+  n'est offert que pour les ressources à faible risque. Plus strict qu'agy, par
+  conception.
+- **Suggestions argumentées** (`_render_suggested_actions`) : une ligne `Lesson:`
+  concise par suggestion (le *pourquoi*), internals `Match:`/`Missing:` masqués.
+
+### TODO lié à la boucle (chantier 2 — AutonomyPolicy)
+
+- `test_exploit_request_sends_no_function_tools_by_default` est marqué
+  `@unittest.expectedFailure`. Aujourd'hui l'agent envoie les schémas d'outils
+  d'exploitation par défaut ; l'`AutonomyPolicy` doit retenir ces schémas tant
+  que l'utilisateur n'a pas approuvé un plan (gating de `ToolSchemaSelector` par
+  risque/approbation). Retirer le décorateur quand le test passe.
