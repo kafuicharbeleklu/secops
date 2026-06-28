@@ -390,5 +390,66 @@ class SafeBaselineToolExposureTests(unittest.TestCase):
         self.assertEqual(agent._tools_schema_for_decision(decision), [])
 
 
+class EnvironmentAwareAutonomyTests(unittest.TestCase):
+    """Chantier 2: autonomy adapts per turn to the detected environment."""
+
+    def _agent(self, autonomy=None):
+        return SecOpsAgent(
+            CapturingLLM(),
+            _full_registry(),
+            ConversationMemory(),
+            permissions=PermissionEngine(),
+            autonomy=autonomy,
+        )
+
+    def test_ctf_escalates_to_supervised_and_unblocks_approved_exploit(self):
+        from secops_agent.core.autonomy import AutonomyLevel
+        from secops_agent.core.request_context import classify_request
+
+        agent = self._agent()
+        decision = classify_request(
+            "lance la phase d'exploitation complète sur la box HackTheBox"
+        )
+        policy = agent._autonomy_for_turn(decision)
+
+        self.assertEqual(policy.level, AutonomyLevel.SUPERVISED)
+        # Supervised does not pause for exploitation → multi-step chaining allowed.
+        self.assertFalse(policy.pauses_for(decision.risk))
+        # An approved exploit batch exposes the offensive primitives.
+        names = {s["name"] for s in agent._tools_schema_for_decision(decision)}
+        self.assertIn("webshell_exec", names)
+
+    def test_authorized_org_stays_risk_based_and_pauses_exploit(self):
+        from secops_agent.core.autonomy import AutonomyLevel
+        from secops_agent.core.request_context import classify_request
+
+        agent = self._agent()
+        decision = classify_request(
+            "lance la phase d'exploitation complète sur le serveur de production"
+        )
+        policy = agent._autonomy_for_turn(decision)
+
+        self.assertEqual(policy.level, AutonomyLevel.RISK_BASED)
+        self.assertTrue(policy.pauses_for(decision.risk))
+
+    def test_unapproved_exploit_in_lab_still_withholds_schemas(self):
+        from secops_agent.core.request_context import classify_request
+
+        agent = self._agent()
+        decision = classify_request("upload a php webshell on the HackTheBox machine")
+
+        # CTF escalates to supervised, but an unapproved exploit is still withheld.
+        self.assertEqual(agent._tools_schema_for_decision(decision), [])
+
+    def test_explicit_policy_overrides_environment_adaptation(self):
+        from secops_agent.core.autonomy import AutonomyLevel, AutonomyPolicy
+        from secops_agent.core.request_context import classify_request
+
+        agent = self._agent(autonomy=AutonomyPolicy(level=AutonomyLevel.COPILOT))
+        decision = classify_request("scan the HackTheBox machine")
+
+        self.assertEqual(agent._autonomy_for_turn(decision).level, AutonomyLevel.COPILOT)
+
+
 if __name__ == "__main__":
     unittest.main()

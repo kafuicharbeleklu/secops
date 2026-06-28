@@ -246,7 +246,11 @@ class SecOpsAgent:
         self.max_chained_actions_per_turn = max(0, max_chained_actions_per_turn)
         self.allow_automatic_planner_execution = bool(allow_automatic_planner_execution)
         # Semi-autonomous-by-risk by default (see docs/ARCHITECTURE.md §7).
+        # When no policy is injected, autonomy adapts per turn to the detected
+        # environment (trusted lab/CTF -> supervised); an explicit policy is
+        # respected as-is.
         self.autonomy = autonomy or AutonomyPolicy()
+        self._autonomy_explicit = autonomy is not None
         self.approval_timeout = approval_timeout
         self.tracer = StructuredTracer(trace_sink or trace_sink_from_settings())
         self.llm_max_attempts = max(1, int(llm_max_attempts or 1))
@@ -761,11 +765,22 @@ class SecOpsAgent:
             self._safe_baseline_cache = cached
         return cached
 
+    def _autonomy_for_turn(self, decision: RequestDecision) -> AutonomyPolicy:
+        """Effective policy for this turn.
+
+        An explicitly injected policy is used as-is; otherwise autonomy adapts
+        to the detected environment so a trusted lab/CTF escalates to supervised
+        (low-risk runs freely; exploitation pauses until approved, then chains).
+        """
+        if self._autonomy_explicit:
+            return self.autonomy
+        return AutonomyPolicy.for_environment(decision.environment_hint)
+
     def _tools_schema_for_decision(self, decision: RequestDecision) -> list[dict[str, Any]]:
         # AutonomyPolicy (§7): withhold exploitation/destructive tool schemas
         # until the user has approved a plan. The PermissionEngine still gates
         # any exposed tool at execution time.
-        if not self.autonomy.exposes_tool_schemas(decision):
+        if not self._autonomy_for_turn(decision).exposes_tool_schemas(decision):
             return []
         selection = self.tool_schema_selector.select(decision)
         # Goal-specific tools rank first, then the safe baseline as a floor so a
@@ -1441,7 +1456,7 @@ class SecOpsAgent:
             not self.allow_automatic_planner_execution
             and not guided_lab_restraint_turn
             and request_decision.user_intent in _CHAINING_INTENTS
-            and not self.autonomy.pauses_for(request_decision.risk)
+            and not self._autonomy_for_turn(request_decision).pauses_for(request_decision.risk)
         )
         self._trace(
             "turn_started",
