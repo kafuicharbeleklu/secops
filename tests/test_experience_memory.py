@@ -1119,6 +1119,38 @@ Nmap done: 1 IP address (0 hosts up) scanned in 2.26 seconds
         self.assertNotIn("Match:", output)
         self.assertNotIn("Missing:", output)
 
+    def test_renderer_hides_suggestion_learning_telemetry_from_lesson_line(self):
+        # action.experience mixes real lessons with internal "suggestion
+        # learning" telemetry; only the real lesson must reach the user.
+        renderer = Renderer()
+        renderer.console = Console(width=100, record=True, force_terminal=False, file=io.StringIO())
+        telemetry_only = SimpleNamespace(
+            title="Install missing local tool: ffuf",
+            tool_name="run_shell",
+            arguments={},
+            risk="high",
+            experience=["suggestion learning: local suggestion signals: selected=15, ignored=36"],
+            experience_details=[],
+        )
+        with_real_lesson = SimpleNamespace(
+            title="Assess upload surface",
+            tool_name="",
+            arguments={},
+            risk="high",
+            experience=[
+                "suggestion learning: local suggestion signals: selected=15, ignored=36",
+                "similar prior success: extension filtering check",
+            ],
+            experience_details=[],
+        )
+
+        renderer._render_suggested_actions([telemetry_only, with_real_lesson])
+        output = renderer.console.export_text()
+
+        self.assertNotIn("suggestion learning", output)
+        self.assertNotIn("suggestion signals", output)
+        self.assertIn("Lesson: similar prior success: extension filtering check", output)
+
 
 class ExperienceAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_agent_persists_tool_result_lesson_and_updates_planner(self):

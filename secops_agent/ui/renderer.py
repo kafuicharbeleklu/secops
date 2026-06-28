@@ -4551,14 +4551,16 @@ class Renderer:
             # §5: one concise experience reason per suggestion; verbose
             # Match:/Missing: learning internals stay hidden.
             if self._display_prefs.get("show_experience", True):
-                experience = [
-                    str(item).strip()
-                    for item in (getattr(action, "experience", []) or [])
-                    if str(item).strip()
+                # Only surface real cross-mission lessons; skip internal
+                # "suggestion learning" telemetry that also rides on .experience.
+                lessons = [
+                    text
+                    for text in (str(item).strip() for item in (getattr(action, "experience", []) or []))
+                    if text and not text.lower().startswith("suggestion learning")
                 ]
-                if experience:
+                if lessons:
                     self.console.print(
-                        f"     [{COLORS['text_muted']}]Lesson: {escape(experience[0])}[/{COLORS['text_muted']}]"
+                        f"     [{COLORS['text_muted']}]Lesson: {escape(lessons[0])}[/{COLORS['text_muted']}]"
                     )
         self.console.print(f"  [{COLORS['text_muted']}]Reply with a number or describe what to do next.[/{COLORS['text_muted']}]")
 
