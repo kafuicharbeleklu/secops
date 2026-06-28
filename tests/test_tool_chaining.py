@@ -77,13 +77,16 @@ class FollowupToolLLM(ChainFakeLLM):
                 )
             )
             return
-        yield StreamChunk(
-            tool_call=ToolCallChunk(
-                name="http_headers",
-                arguments={"url": "http://10.10.10.5"},
-                id="call_2",
+        if self.calls == 2:
+            yield StreamChunk(
+                tool_call=ToolCallChunk(
+                    name="http_headers",
+                    arguments={"url": "http://10.10.10.5"},
+                    id="call_2",
+                )
             )
-        )
+            return
+        yield StreamChunk(content="done")
 
 
 async def _collect_events(
@@ -236,7 +239,9 @@ class ToolChainingTests(unittest.IsolatedAsyncioTestCase):
             max_iterations=2,
         )
 
-        events = await _collect_events(agent)
+        # A specific single-tool request stays in single-step proposal mode:
+        # the planner suggests http_headers but never auto-executes it.
+        events = await _collect_events(agent, "fais un scan des ports sur 10.10.10.5")
 
         suggestions = [event for event in events if isinstance(event, SuggestedActionsEvent)]
         self.assertEqual([event.name for event in events if isinstance(event, ToolCallEvent)], ["nmap_scan"])
@@ -246,19 +251,32 @@ class ToolChainingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(suggestions), 1)
         self.assertEqual([action.tool_name for action in suggestions[0].actions], ["http_headers"])
 
-    async def test_followup_llm_tool_call_is_ignored_without_orchestration(self):
+    async def test_open_ended_request_chains_llm_tool_calls_multi_step(self):
+        # RC2: a broad request ("enumerate 10.10.10.5") lets the model chain
+        # tool calls across iterations within one turn.
         agent, executed, _ = self._proposal_agent()
+        agent.max_iterations = 4
         llm = FollowupToolLLM()
         agent.llm = llm
 
         events = await _collect_events(agent)
 
-        self.assertEqual(llm.calls, 2)
-        self.assertEqual([event.name for event in events if isinstance(event, ToolCallEvent)], ["nmap_scan"])
-        self.assertEqual([event.name for event in events if isinstance(event, ToolStartEvent)], ["nmap_scan"])
-        self.assertEqual(executed, ["nmap_scan"])
-        suggestions = [event for event in events if isinstance(event, SuggestedActionsEvent)]
-        self.assertEqual([action.tool_name for action in suggestions[0].actions], ["http_headers", "tech_detect", "dir_brute"])
+        # nmap (iter 1) -> http_headers (iter 2) -> final text (iter 3).
+        self.assertEqual(llm.calls, 3)
+        self.assertEqual(
+            [event.name for event in events if isinstance(event, ToolCallEvent)],
+            ["nmap_scan", "http_headers"],
+        )
+        self.assertEqual(
+            [event.name for event in events if isinstance(event, ToolStartEvent)],
+            ["nmap_scan", "http_headers"],
+        )
+        self.assertEqual(executed, ["nmap_scan", "http_headers"])
+        # Suggestions are suppressed while the model is chaining.
+        self.assertEqual(
+            [event for event in events if isinstance(event, SuggestedActionsEvent)],
+            [],
+        )
 
     async def test_continue_runs_only_top_suggested_action_without_llm(self):
         agent, executed, llm = self._proposal_agent()

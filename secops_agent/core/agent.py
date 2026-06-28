@@ -37,6 +37,7 @@ from secops_agent.core.request_context import (
     RequestDecision,
     TechnicalGoal,
     ToolSchemaSelector,
+    UserIntent,
     classify_request,
 )
 from secops_agent.core.sandbox import validate_shell_command
@@ -194,6 +195,13 @@ AgentEvent = Union[
     SudoAuthenticationRequestEvent,
     TokenUsageEvent,
 ]
+
+
+# Intents broad enough to warrant LLM-driven multi-step chaining (RC2). A
+# specific single-tool request (RUN_SINGLE_TOOL) or a plan request
+# (PROPOSE_PLAN) is answered in one step and then offers suggestions; focused
+# questions and greetings never reach here (they suppress follow-ups).
+_CHAINING_INTENTS = frozenset({UserIntent.UNKNOWN, UserIntent.APPROVED_BATCH})
 
 
 # ── Agent ─────────────────────────────────────────────────────────────
@@ -1393,6 +1401,19 @@ class SecOpsAgent:
         if self._looks_like_guided_multistep_task(user_input):
             self._active_guided_task_text = user_input
         guided_lab_restraint_turn = request_decision.should_suppress_followups
+        # RC2 (multi-step): for broader low-risk work, let the model chain tool
+        # calls across iterations within a single turn (recon -> enumerate ->
+        # ...). We pause for a text-only summary only when the turn is a focused
+        # answer/social turn (answer once, stop) or the autonomy policy requires
+        # approval for this risk level (exploitation/destructive). The exposed
+        # toolset already excludes offensive/privileged primitives for low-risk
+        # turns, so the chain stays within safe tools; max_iterations bounds it.
+        allow_llm_chaining = (
+            not self.allow_automatic_planner_execution
+            and not guided_lab_restraint_turn
+            and request_decision.user_intent in _CHAINING_INTENTS
+            and not self.autonomy.pauses_for(request_decision.risk)
+        )
         self._trace(
             "turn_started",
             turn_id=turn_id,
@@ -1401,6 +1422,7 @@ class SecOpsAgent:
             attachments=len(attachments or []),
             technical_goal=getattr(request_decision.technical_goal, "value", str(request_decision.technical_goal)),
             should_suppress_followups=request_decision.should_suppress_followups,
+            llm_chaining=allow_llm_chaining,
         )
 
         local_answer = self._local_preflight_answer(user_input, request_decision)
@@ -2170,16 +2192,25 @@ class SecOpsAgent:
                     if answer_summary:
                         yield TextEvent(content=answer_summary)
                         self.memory.add_assistant_message(answer_summary)
-                if pending_suggestions:
+                # Suggestions are a single-step affordance: when the model is
+                # chaining multi-step it drives its own next action, so emitting
+                # "suggested next actions" mid-chain would be noise.
+                if pending_suggestions and not allow_llm_chaining:
                     yield SuggestedActionsEvent(actions=pending_suggestions)
 
             if local_preflight_turn:
                 yield TextEvent(content="", done=True)
                 break
 
-            # After local tool execution, allow one natural-language summary pass,
-            # but do not expose tools again unless explicit orchestration is enabled.
-            if tool_calls_to_run and not self.allow_automatic_planner_execution:
+            # After a tool batch, either let the model keep chaining (RC2
+            # multi-step) or fall back to one natural-language summary pass with
+            # tools withheld. Focused-answer/social turns and high-risk turns do
+            # not chain.
+            if (
+                tool_calls_to_run
+                and not self.allow_automatic_planner_execution
+                and not allow_llm_chaining
+            ):
                 text_only_followup_after_tools = True
         else:
             yield ErrorEvent(
