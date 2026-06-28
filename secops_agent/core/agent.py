@@ -31,6 +31,7 @@ from secops_agent.core.experience import build_lesson_from_tool_result, build_su
 from secops_agent.core.hooks import HookManager
 from secops_agent.core.observability import StructuredTracer, TraceSink, trace_sink_from_settings
 from secops_agent.core.mission import ActionTraceEntry
+from secops_agent.core.autonomy import AutonomyPolicy
 from secops_agent.core.planner import MissionPlanner, NextAction
 from secops_agent.core.request_context import (
     RequestDecision,
@@ -212,6 +213,7 @@ class SecOpsAgent:
         experience_store: Any | None = None,
         max_chained_actions_per_turn: int = 0,
         allow_automatic_planner_execution: bool = False,
+        autonomy: AutonomyPolicy | None = None,
         approval_timeout: float = 600.0,
         tool_idle_progress_interval: float = _DEFAULT_TOOL_IDLE_PROGRESS_INTERVAL,
         trace_sink: TraceSink | None = None,
@@ -235,6 +237,8 @@ class SecOpsAgent:
         self.experience_store = experience_store
         self.max_chained_actions_per_turn = max(0, max_chained_actions_per_turn)
         self.allow_automatic_planner_execution = bool(allow_automatic_planner_execution)
+        # Semi-autonomous-by-risk by default (see docs/ARCHITECTURE.md §7).
+        self.autonomy = autonomy or AutonomyPolicy()
         self.approval_timeout = approval_timeout
         self.tracer = StructuredTracer(trace_sink or trace_sink_from_settings())
         self.llm_max_attempts = max(1, int(llm_max_attempts or 1))
@@ -688,6 +692,11 @@ class SecOpsAgent:
         return classify_request(user_input, mission=mission)
 
     def _tools_schema_for_decision(self, decision: RequestDecision) -> list[dict[str, Any]]:
+        # AutonomyPolicy (§7): withhold exploitation/destructive tool schemas
+        # until the user has approved a plan. The PermissionEngine still gates
+        # any exposed tool at execution time.
+        if not self.autonomy.exposes_tool_schemas(decision):
+            return []
         selection = self.tool_schema_selector.select(decision)
         return self.registry.get_tools_schema(selection.tool_names)
 

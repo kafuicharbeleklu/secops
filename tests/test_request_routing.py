@@ -217,10 +217,6 @@ What is the hidden directory?
         self.assertTrue(llm.called)
         self.assertFalse(any(isinstance(event, ToolCallEvent) for event in events))
 
-    @unittest.expectedFailure  # TODO(AutonomyPolicy, ARCHITECTURE.md §8): withhold
-    # exploitation-tool schemas until the user approves a plan. Currently the agent
-    # sends them by default; this is resolved when AutonomyPolicy (chantier 2) gates
-    # tool-schema selection by risk/approval. Remove this decorator once it passes.
     async def test_exploit_request_sends_no_function_tools_by_default(self):
         llm = CapturingLLM()
         registry = _registry_with_tools("generate_payload", "run_shell", "nmap_scan", "dir_brute")

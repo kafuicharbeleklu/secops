@@ -282,10 +282,19 @@ de l'**explicitation** et de la **découpe**. Ordre recommandé :
 - **Suggestions argumentées** (`_render_suggested_actions`) : une ligne `Lesson:`
   concise par suggestion (le *pourquoi*), internals `Match:`/`Missing:` masqués.
 
-### TODO lié à la boucle (chantier 2 — AutonomyPolicy)
+### Chantier 2 — AutonomyPolicy (en cours)
 
-- `test_exploit_request_sends_no_function_tools_by_default` est marqué
-  `@unittest.expectedFailure`. Aujourd'hui l'agent envoie les schémas d'outils
-  d'exploitation par défaut ; l'`AutonomyPolicy` doit retenir ces schémas tant
-  que l'utilisateur n'a pas approuvé un plan (gating de `ToolSchemaSelector` par
-  risque/approbation). Retirer le décorateur quand le test passe.
+`core/autonomy.py` implémente `AutonomyPolicy` (niveaux `copilot` /
+`risk_based` (défaut) / `supervised` / `sandbox`), avec :
+- `exposes_tool_schemas(decision)` — **fait** : les schémas d'outils
+  exploitation/destructifs sont retenus tant que l'utilisateur n'a pas approuvé
+  un plan (sauf en sandbox). Câblé dans `agent._tools_schema_for_decision` ;
+  résout `test_exploit_request_sends_no_function_tools_by_default`.
+- `pauses_for(risk)` — défini et testé, **pas encore câblé** dans la boucle
+  d'exécution.
+
+**Reste à faire** : migrer le chaînage automatique
+(`allow_automatic_planner_execution`, hot path de `stream_response`) vers
+`AutonomyPolicy.pauses_for`, et adapter le niveau par requête via
+`AutonomyPolicy.for_environment(decision.environment_hint)`. Préalable à la
+boucle plan→act→observe→reflect (chantier 3).
