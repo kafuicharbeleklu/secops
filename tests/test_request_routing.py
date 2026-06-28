@@ -264,6 +264,79 @@ def _full_registry():
     return registry
 
 
+class AnnounceFirstLLM:
+    """Announces an action on call 1 without a tool call, answers on call 2."""
+
+    model_name = "announce"
+
+    def __init__(self):
+        self.calls = 0
+
+    def prepare_for_prompt(self, prompt: str, **kwargs):
+        pass
+
+    async def stream_chat(self, messages: list[Message], tools_schema=None):
+        self.calls += 1
+        if self.calls == 1:
+            yield StreamChunk(content="Je vais scanner le port 80 du serveur.")
+            return
+        yield StreamChunk(content="Le port 80 est ouvert.")
+
+
+class SilentLLM:
+    model_name = "silent"
+
+    def __init__(self):
+        self.calls = 0
+
+    def prepare_for_prompt(self, prompt: str, **kwargs):
+        pass
+
+    async def stream_chat(self, messages: list[Message], tools_schema=None):
+        self.calls += 1
+        yield StreamChunk(content="")
+
+
+class LoopGuardrailTests(unittest.IsolatedAsyncioTestCase):
+    async def test_announced_action_without_tool_call_triggers_one_retry(self):
+        llm = AnnounceFirstLLM()
+        agent = SecOpsAgent(
+            llm,
+            _registry_with_tools("nmap_scan", "ping_host"),
+            ConversationMemory(),
+            permissions=PermissionEngine(),
+        )
+
+        await _collect(agent, "scan the box")
+
+        # The announcement-without-action grants exactly one corrective pass.
+        self.assertEqual(llm.calls, 2)
+        reminders = [
+            m
+            for m in agent.memory.messages
+            if m.role == "user" and "System reminder" in m.content
+        ]
+        self.assertEqual(len(reminders), 1)
+
+    async def test_blank_turn_falls_back_to_a_clarifying_message(self):
+        llm = SilentLLM()
+        agent = SecOpsAgent(
+            llm,
+            _registry_with_tools("nmap_scan"),
+            ConversationMemory(),
+            permissions=PermissionEngine(),
+        )
+
+        events = await _collect(agent, "scan the box")
+        text = "".join(e.content for e in events if isinstance(e, TextEvent))
+
+        # Empty output is not an action announcement -> no retry, but never blank.
+        self.assertEqual(llm.calls, 1)
+        self.assertIn("clarify", text.lower())
+        last_assistant = [m for m in agent.memory.messages if m.role == "model"][-1]
+        self.assertTrue(last_assistant.content.strip())
+
+
 class SafeBaselineToolExposureTests(unittest.TestCase):
     """RC1: a vague request exposes a usable safe baseline, not an empty schema."""
 

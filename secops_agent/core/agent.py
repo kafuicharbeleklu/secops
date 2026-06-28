@@ -279,6 +279,35 @@ class SecOpsAgent:
         normalized = unicodedata.normalize("NFKD", text or "")
         return "".join(ch for ch in normalized if not unicodedata.combining(ch)).casefold()
 
+    # First-person "about to act now" cues (FR/EN), accent-stripped/casefolded.
+    _ACTION_ANNOUNCEMENT_CUES = (
+        "je vais ",
+        "je lance",
+        "je commence par",
+        "je procede",
+        "laisse-moi",
+        "laissez-moi",
+        "on va lancer",
+        "let me ",
+        "i'll ",
+        "i will ",
+        "i am going to",
+        "i'm going to",
+        "going to run",
+    )
+
+    @staticmethod
+    def _announces_unexecuted_action(text: str) -> bool:
+        """Heuristic: text announces a tool action but no tool call was made.
+
+        Conservative — used only to grant one corrective iteration when tools
+        were available, so a rare false positive costs at most one extra pass.
+        """
+        plain = SecOpsAgent._plain_text(text).replace("’", "'")
+        if not plain:
+            return False
+        return any(cue in plain for cue in SecOpsAgent._ACTION_ANNOUNCEMENT_CUES)
+
     @staticmethod
     def _strip_mission_state_sections(text: str) -> str:
         """Remove noisy mission summaries from focused answer turns."""
@@ -1457,8 +1486,10 @@ class SecOpsAgent:
         iteration = 0
         local_preflight_calls = self._local_preflight_tool_calls(user_input)
         text_only_followup_after_tools = False
+        announced_action_retry_used = False
         while iteration < self.max_iterations:
             iteration += 1
+            tools_were_offered = False
 
             current_response_text = ""
             tool_calls_to_run = []
@@ -1492,6 +1523,7 @@ class SecOpsAgent:
                     if text_only_followup_after_tools and not self.allow_automatic_planner_execution
                     else self._tools_schema_for_decision(request_decision)
                 )
+                tools_were_offered = bool(tools_schema)
 
                 async for llm_item in self._stream_llm_with_retries(
                     tools_schema=tools_schema,
@@ -1579,14 +1611,44 @@ class SecOpsAgent:
                 if not defer_text_stream:
                     yield TextEvent(content=current_response_text)
 
+            # Loop guardrails for an iteration that produced no tool calls.
+            no_tools_this_iter = not tool_calls_to_run
+            if no_tools_this_iter:
+                # Guard: the model narrated an action ("Je vais scanner...")
+                # while tools were available but called nothing. Give it one
+                # corrective iteration to actually act before ending the turn.
+                if (
+                    tools_were_offered
+                    and not announced_action_retry_used
+                    and self._announces_unexecuted_action(current_response_text)
+                ):
+                    announced_action_retry_used = True
+                    if not local_preflight_turn:
+                        yield TextEvent(content="", done=True)
+                    self.memory.add_assistant_message(current_response_text)
+                    self.memory.add_user_message(
+                        "(System reminder: you described an action but did not call "
+                        "the tool. If you intend to run it, call the tool now via a "
+                        "function call; otherwise give the direct answer.)"
+                    )
+                    continue
+
+                # Guard: never end a turn on a blank assistant message.
+                if not current_response_text.strip():
+                    current_response_text = (
+                        "I don't have anything to run for that. Could you clarify "
+                        "what you'd like me to do, or give a target to work with?"
+                    )
+                    if not defer_text_stream:
+                        yield TextEvent(content=current_response_text)
+
             # Close streamed LLM text before executing model-requested tools.
             # Local preflight turns generate their user-facing summary after
             # the deterministic tool result, so close them at the end instead.
             if not local_preflight_turn:
                 yield TextEvent(content="", done=True)
 
-            # If no tool calls, we're done
-            if not tool_calls_to_run:
+            if no_tools_this_iter:
                 self.memory.add_assistant_message(current_response_text)
                 break
 
