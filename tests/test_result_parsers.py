@@ -262,6 +262,29 @@ Apache HTTP Server 2.4.50 - Remote Code Execution   | multiple/remote/50406.py
         self.assertTrue(all(finding.category == "suid_binary" for finding in parsed.findings))
         self.assertIn("privilege-escalation review", parsed.next_steps[0])
 
+    def test_generic_parser_surfaces_short_output_as_the_summary(self):
+        # vpn_status has no dedicated parser -> generic fallback. The summary
+        # must be the actual fact, not a "N line(s) of output" meta count.
+        parsed = self.parser.parse(
+            "vpn_status", "VPN active: connected via tun0 (10.10.14.7)", {}
+        )
+
+        self.assertEqual(parsed.summary, "VPN active: connected via tun0 (10.10.14.7)")
+        self.assertNotIn("line(s) of output", parsed.summary)
+
+    def test_generic_parser_leads_long_output_with_first_line_and_count(self):
+        raw = "\n".join(f"line {i}" for i in range(1, 21))
+
+        parsed = self.parser.parse("some_tool", raw, {})
+
+        self.assertTrue(parsed.summary.startswith("line 1"))
+        self.assertIn("+19 more line(s)", parsed.summary)
+
+    def test_generic_parser_handles_empty_output(self):
+        parsed = self.parser.parse("vpn_status", "   \n  ", {})
+
+        self.assertEqual(parsed.summary, "vpn_status: (no output)")
+
 
 if __name__ == "__main__":
     unittest.main()

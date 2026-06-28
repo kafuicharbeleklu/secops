@@ -1312,12 +1312,26 @@ def parse_run_shell_output(raw: str, args: Dict[str, Any]) -> ParsedResult:
 
 
 def parse_generic_output(raw: str, args: Dict[str, Any]) -> ParsedResult:
-    """Fallback parser — returns the output with minimal processing."""
+    """Fallback parser — lead the summary with the actual content.
+
+    Tools without a dedicated parser (vpn_status, sysinfo, lab_setup_check, ...)
+    previously summarised as a meta count ("N line(s) of output / First line:")
+    which buried the key fact and read as noise in the answer. Now a short
+    output is surfaced verbatim; a long one leads with its first substantive
+    line plus a remainder count.
+    """
     tool = args.get("_tool_name", "unknown")
-    lines = raw.strip().split("\n")
-    summary = f"{tool}: {len(lines)} line(s) of output"
-    if lines:
-        summary += f"\nFirst line: {lines[0][:120]}"
+    clean = _clean_text(raw)
+    lines = [line for line in clean.split("\n") if line.strip()]
+
+    if not lines:
+        summary = f"{tool}: (no output)"
+    elif len(lines) <= 4 and len(clean) <= 400:
+        summary = clean
+    else:
+        summary = lines[0][:200]
+        if len(lines) > 1:
+            summary += f"  (+{len(lines) - 1} more line(s))"
 
     return ParsedResult(
         tool_name=tool,

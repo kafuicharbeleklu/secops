@@ -15,6 +15,7 @@ from secops_agent.core.agent import (
 )
 from secops_agent.core.memory import ConversationMemory
 from secops_agent.core.permissions import ApprovalDecision, PermissionEngine
+from secops_agent.core.result_parser import ToolResultParser
 from secops_agent.core.sandbox import set_sandbox_enabled
 from secops_agent.core.tools import ToolCategory, ToolRegistry
 from secops_agent.tools import forensics
@@ -179,7 +180,13 @@ class LocalLabSetupTests(unittest.IsolatedAsyncioTestCase):
             func=vpn_status,
             dangerous=False,
         )
-        agent = SecOpsAgent(BrokenLLM(), registry, ConversationMemory(), permissions=PermissionEngine())
+        agent = SecOpsAgent(
+            BrokenLLM(),
+            registry,
+            ConversationMemory(),
+            permissions=PermissionEngine(),
+            result_parser=ToolResultParser(),
+        )
 
         events = await _collect(agent, "is the vpn still activate?")
 
@@ -188,6 +195,9 @@ class LocalLabSetupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executed, [{}])
         rendered_text = "".join(event.content for event in events if isinstance(event, TextEvent))
         self.assertNotIn("Je vais traiter cette demande", rendered_text)
+        # The answer leads with the actual status, not a "N line(s)" meta count.
+        self.assertIn("VPN status: down/stale", rendered_text)
+        self.assertNotIn("line(s) of output", rendered_text)
 
     async def test_vpn_disconnect_prompt_uses_disconnect_tool_without_llm(self):
         registry = ToolRegistry()
