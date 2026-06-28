@@ -1089,6 +1089,27 @@ Nmap done: 1 IP address (0 hosts up) scanned in 2.26 seconds
 
         self.assertFalse(any(action.tool_name == "nmap_scan" for action in actions))
 
+    def test_renderer_grounds_suggestion_in_mission_rationale_and_evidence(self):
+        renderer = Renderer()
+        renderer.console = Console(width=100, record=True, force_terminal=False, file=io.StringIO())
+        action = SimpleNamespace(
+            title="Enumerate directories on http://10.10.10.5",
+            tool_name="dir_brute",
+            arguments={"url": "http://10.10.10.5"},
+            risk="low",
+            rationale="HTTP service detected with no mapped content paths yet",
+            evidence=["port 80 open: Apache 2.4.41"],
+            experience=[],
+            experience_details=[],
+        )
+
+        renderer._render_suggested_actions([action])
+        output = renderer.console.export_text()
+
+        self.assertIn("Why:", output)
+        self.assertIn("HTTP service detected with no mapped content paths yet", output)
+        self.assertIn("port 80 open: Apache 2.4.41", output)
+
     def test_renderer_shows_experience_reason_in_suggestion_block(self):
         renderer = Renderer()
         renderer.console = Console(width=100, record=True, force_terminal=False, file=io.StringIO())

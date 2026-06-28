@@ -4548,6 +4548,24 @@ class Renderer:
             detail = f" [{COLORS['text_muted']}]· {escape(' · '.join(detail_parts))}[/{COLORS['text_muted']}]" if detail_parts else ""
             title = escape(str(getattr(action, "title", "") or "Next action"))
             self.console.print(f"  {index}. [{COLORS['text']}]{title}[/{COLORS['text']}]{detail}")
+            # §5 (mission anchor): ground each suggestion in current mission
+            # state — lead with the rationale, append the concrete discovered
+            # fact (evidence) that motivated it. This is distinct from the
+            # cross-mission "Lesson:" line below.
+            if self._display_prefs.get("show_rationale", True):
+                rationale = str(getattr(action, "rationale", "") or "").strip()
+                evidence_items = [
+                    str(item).strip()
+                    for item in (getattr(action, "evidence", []) or [])
+                    if str(item).strip()
+                ]
+                anchor = rationale if rationale and rationale != title else ""
+                if evidence_items:
+                    anchor = f"{anchor} — {evidence_items[0]}" if anchor else evidence_items[0]
+                if anchor:
+                    self.console.print(
+                        f"     [{COLORS['text_muted']}]Why: {escape(anchor)}[/{COLORS['text_muted']}]"
+                    )
             # §5: one concise experience reason per suggestion; verbose
             # Match:/Missing: learning internals stay hidden.
             if self._display_prefs.get("show_experience", True):
