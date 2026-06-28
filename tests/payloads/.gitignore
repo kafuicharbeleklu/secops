@@ -1,0 +1,7 @@
+# Test payloads — dangerous files kept only as samples for pentesting exercises.
+# Renamed with .sample extension to prevent accidental execution.
+# DO NOT serve this directory from any web server.
+*.php
+*.jsp
+*.asp
+*.aspx
