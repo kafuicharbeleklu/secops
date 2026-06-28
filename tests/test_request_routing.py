@@ -164,7 +164,7 @@ What is the hidden directory?
         )
         self.assertEqual(executed, [{"target": "10.129.134.39", "scan_type": "version"}])
 
-    async def test_port_scan_prompt_exposes_only_scan_relevant_tools(self):
+    async def test_port_scan_prompt_ranks_scan_tools_first_over_safe_baseline(self):
         llm = CapturingLLM()
         registry = _registry_with_tools(
             "nmap_scan",
@@ -178,11 +178,16 @@ What is the hidden directory?
 
         await _collect(agent, "scan open ports on the current target")
 
-        names = {schema["name"] for schema in llm.tools_schema}
-        self.assertEqual({"nmap_scan", "ping_host", "port_check"}, names)
+        names = [schema["name"] for schema in llm.tools_schema]
+        # PORT_SCAN priority tools lead; safe baseline tools follow.
+        self.assertEqual(names[:3], ["ping_host", "port_check", "nmap_scan"])
+        self.assertIn("dir_brute", names)
+        self.assertIn("tech_detect", names)
+        # External (MCP supply-chain) tools stay out of the safe baseline.
+        self.assertNotIn("mcp_external", names)
         self.assertEqual("port_scan", llm.context["technical_goal"])
 
-    async def test_web_directory_prompt_exposes_only_dir_brute_schema(self):
+    async def test_web_directory_prompt_leads_with_dir_brute_plus_safe_baseline(self):
         llm = CapturingLLM()
         registry = _registry_with_tools(
             "dir_brute",
@@ -195,8 +200,12 @@ What is the hidden directory?
 
         await _collect(agent, "Find directories on the web server using GoBuster")
 
-        names = {schema["name"] for schema in llm.tools_schema}
-        self.assertEqual({"dir_brute"}, names)
+        names = [schema["name"] for schema in llm.tools_schema]
+        self.assertEqual(names[0], "dir_brute")
+        # Safe baseline fills in the rest; external tools excluded.
+        self.assertIn("http_headers", names)
+        self.assertIn("nmap_scan", names)
+        self.assertNotIn("mcp_external", names)
         self.assertEqual("web_dir_enum", llm.context["technical_goal"])
 
     async def test_pasted_walkthrough_context_does_not_trigger_gobuster_preflight(self):
@@ -241,6 +250,71 @@ What is the hidden directory?
         self.assertNotIn("Archived tool call", text)
         self.assertNotIn("http_get", text)
         self.assertIn("did not run a tool", text)
+
+
+def _full_registry():
+    import importlib
+    import pkgutil
+
+    import secops_agent.tools as tools_pkg
+    from secops_agent.core.tools import registry
+
+    for module in pkgutil.iter_modules(tools_pkg.__path__):
+        importlib.import_module(f"secops_agent.tools.{module.name}")
+    return registry
+
+
+class SafeBaselineToolExposureTests(unittest.TestCase):
+    """RC1: a vague request exposes a usable safe baseline, not an empty schema."""
+
+    def _agent(self):
+        return SecOpsAgent(
+            CapturingLLM(),
+            _full_registry(),
+            ConversationMemory(),
+            permissions=PermissionEngine(),
+        )
+
+    def test_vague_request_exposes_safe_baseline_instead_of_nothing(self):
+        from secops_agent.core.request_context import classify_request
+
+        agent = self._agent()
+        decision = classify_request("scan the box")
+        names = {s["name"] for s in agent._tools_schema_for_decision(decision)}
+
+        # Previously empty; now a broad safe toolset is offered.
+        self.assertIn("nmap_scan", names)
+        self.assertIn("dns_lookup", names)
+        # Tools formerly unreachable by any goal are now exposed.
+        self.assertIn("nuclei_scan", names)
+        self.assertIn("hash_identify", names)
+        # Privileged + offensive primitives stay behind the gate.
+        self.assertNotIn("run_shell", names)
+        self.assertNotIn("connect_vpn_config", names)
+        self.assertNotIn("webshell_exec", names)
+        self.assertNotIn("generate_payload", names)
+        self.assertNotIn("start_listener", names)
+
+    def test_goal_specific_tools_rank_before_baseline(self):
+        from secops_agent.core.request_context import classify_request
+
+        agent = self._agent()
+        decision = classify_request("how many ports are open on 10.10.10.5?")
+        names = [s["name"] for s in agent._tools_schema_for_decision(decision)]
+
+        # PORT_SCAN priority tools lead the schema, baseline follows.
+        self.assertEqual(names[0], "ping_host")
+        self.assertLess(names.index("nmap_scan"), names.index("hash_identify"))
+
+    def test_unapproved_exploit_request_still_withholds_all_schemas(self):
+        from secops_agent.core.request_context import classify_request
+
+        agent = self._agent()
+        decision = classify_request("upload a php webshell and get a reverse shell")
+
+        # EXPLOIT risk without approval → AutonomyPolicy withholds everything,
+        # including the safe baseline floor.
+        self.assertEqual(agent._tools_schema_for_decision(decision), [])
 
 
 if __name__ == "__main__":

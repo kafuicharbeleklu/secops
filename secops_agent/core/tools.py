@@ -291,11 +291,23 @@ class ToolRegistry:
         return properties, required
 
     def get_tools_schema(self, names: Iterable[str] | None = None) -> List[Dict[str, Any]]:
+        if names is None:
+            ordered = list(self.tools.values())
+        else:
+            # Preserve caller order (and dedupe) so a ranked selection keeps
+            # its priority tools first in the schema sent to the model.
+            ordered = []
+            seen: set[str] = set()
+            for name in names:
+                key = str(name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                tool = self.tools.get(key)
+                if tool is not None:
+                    ordered.append(tool)
         schema_list = []
-        allowed_names = {str(name) for name in names} if names is not None else None
-        for t in self.tools.values():
-            if allowed_names is not None and t.name not in allowed_names:
-                continue
+        for t in ordered:
             properties = {}
             param_definitions, required = self._parameter_definitions(t.parameters)
             for param_name, definition in param_definitions.items():

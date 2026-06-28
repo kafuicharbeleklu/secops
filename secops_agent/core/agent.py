@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TOOL_IDLE_PROGRESS_INTERVAL = 3.0
 
 from secops_agent.core.llm import LLMProvider, Message, StreamChunk, ToolCallChunk
-from secops_agent.core.tools import ToolProgress, ToolRegistry, ToolResult
+from secops_agent.core.tools import ToolProgress, ToolRegistry, ToolResult, ToolRiskClass
 from secops_agent.core.memory import ConversationMemory
 from secops_agent.core.experience import build_lesson_from_tool_result, build_suggestion_signal
 from secops_agent.core.hooks import HookManager
@@ -691,6 +691,39 @@ class SecOpsAgent:
         )
         return classify_request(user_input, mission=mission)
 
+    # Risk classes safe to expose as a baseline floor under every goal. The
+    # genuinely dangerous primitives — privileged local actions (run_shell, vpn
+    # connect/disconnect) and offensive payload/exploit assistance — are
+    # deliberately excluded and remain behind the AutonomyPolicy gate +
+    # PermissionEngine approval.
+    _SAFE_BASELINE_RISK_CLASSES = frozenset(
+        {
+            ToolRiskClass.PURE_LOCAL_COMPUTATION,
+            ToolRiskClass.LOCAL_OBSERVATION,
+            ToolRiskClass.NETWORK_OBSERVATION,
+            ToolRiskClass.ACTIVE_ENUMERATION,
+            ToolRiskClass.LOCAL_FILE_ACCESS,
+        }
+    )
+
+    def _safe_baseline_tool_names(self) -> list[str]:
+        """Broad set of safe tools exposed under every goal (RC1).
+
+        Derived from the live registry by risk class so newly registered safe
+        tools are picked up automatically. Lets the classifier *rank* rather
+        than *gate*: the model always sees a usable toolset and chooses; the
+        PermissionEngine remains the execution gate.
+        """
+        cached = getattr(self, "_safe_baseline_cache", None)
+        if cached is None:
+            cached = [
+                t.name
+                for t in self.registry.list_tools()
+                if getattr(t, "risk_class", None) in self._SAFE_BASELINE_RISK_CLASSES
+            ]
+            self._safe_baseline_cache = cached
+        return cached
+
     def _tools_schema_for_decision(self, decision: RequestDecision) -> list[dict[str, Any]]:
         # AutonomyPolicy (§7): withhold exploitation/destructive tool schemas
         # until the user has approved a plan. The PermissionEngine still gates
@@ -698,7 +731,16 @@ class SecOpsAgent:
         if not self.autonomy.exposes_tool_schemas(decision):
             return []
         selection = self.tool_schema_selector.select(decision)
-        return self.registry.get_tools_schema(selection.tool_names)
+        # Goal-specific tools rank first, then the safe baseline as a floor so a
+        # vague request ("scan", "check this host") still exposes a usable
+        # toolset instead of an empty schema.
+        names: list[str] = list(selection.tool_names)
+        seen = set(names)
+        for name in self._safe_baseline_tool_names():
+            if name not in seen:
+                names.append(name)
+                seen.add(name)
+        return self.registry.get_tools_schema(names)
 
     @staticmethod
     def _prefers_french(user_input: str) -> bool:
