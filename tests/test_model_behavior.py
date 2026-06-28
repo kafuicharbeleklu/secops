@@ -64,7 +64,8 @@ class ModelBehaviorTests(unittest.TestCase):
         self.assertIn("Do not restate the user's task", instruction)
         self.assertIn("Use bold sparingly", instruction)
         self.assertIn("Avoid decorative headings", instruction)
-        self.assertIn("Do not dump full Mission State after narrow questions", instruction)
+        self.assertIn("A closed question gets one direct line", instruction)
+        self.assertIn("dump Mission State", instruction)
 
     def test_gemma_system_instruction_preserves_same_terminal_contract(self):
         provider = GeminiProvider(api_key="", model_name="gemma")

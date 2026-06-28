@@ -558,8 +558,8 @@ class LocalLabSetupTests(unittest.IsolatedAsyncioTestCase):
 
         prompt = GeminiProvider(api_key="")._system_instruction()
 
-        self.assertIn("Local Lab Setup", prompt)
-        self.assertIn("TryHackMe", prompt)
+        self.assertIn("Lab setup", prompt)
+        self.assertIn("THM", prompt)
         self.assertIn("RootMe", prompt)
         self.assertIn("PortSwigger", prompt)
         self.assertIn("lab_setup_check", prompt)
