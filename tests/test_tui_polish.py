@@ -3514,5 +3514,32 @@ class TUIPolishTests(unittest.TestCase):
         self.assertEqual(agent.prompt, "hello")
 
 
+class SummarizeOutputLeadsWithKeyFactTests(unittest.TestCase):
+    def test_collapsed_preview_skips_leading_banner_and_separators(self):
+        from secops_agent.ui.tool_display import summarize_output
+
+        output = (
+            "========================================\n"
+            "── TOOL DATA ──\n"
+            "VPN active: connected via tun0 (10.10.14.7)\n"
+            "Route: 10.10.10.0/24\n"
+            "── END TOOL DATA ──\n"
+        )
+
+        summary = summarize_output(output, max_lines=4)
+
+        # The fold opens on the key fact, not the rule or the TOOL DATA marker.
+        self.assertEqual(summary["lines"][0], "VPN active: connected via tun0 (10.10.14.7)")
+        self.assertNotIn("TOOL DATA", " ".join(summary["lines"]))
+        self.assertNotIn("====", " ".join(summary["lines"]))
+
+    def test_all_decoration_output_still_previews_something(self):
+        from secops_agent.ui.tool_display import summarize_output
+
+        summary = summarize_output("======\n------\n", max_lines=4)
+
+        self.assertEqual(summary["visible_lines"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

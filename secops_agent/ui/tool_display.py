@@ -80,8 +80,33 @@ def _fit_display(text: str, width: int) -> str:
     return clean[: width - 1] + "…"
 
 
+_DECORATION_CHARS = frozenset(
+    "=-_~*#.+| "
+    "─━│┃┌┐└┘├┤┬┴┼╔╗╚╝═║╠╣╦╩╬▔▁▎▏"
+)
+
+
+def _is_noise_line(line: str) -> bool:
+    """A purely decorative line (separator, banner rule, TOOL DATA marker).
+
+    Such lines carry no result content; leading the collapsed preview with
+    them buries the key fact, so they are skipped when substance exists.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if "TOOL DATA" in stripped.upper():
+        return True
+    return all(ch in _DECORATION_CHARS for ch in stripped)
+
+
 def summarize_output(text: str, max_lines: int = 6, max_width: int = 110) -> Dict[str, Any]:
-    """Build a compact, stable preview while keeping the full output elsewhere."""
+    """Build a compact, stable preview while keeping the full output elsewhere.
+
+    Leads with the first substantive line: decorative separators, banner rules,
+    and TOOL DATA markers are skipped so the fold opens on the key fact rather
+    than on noise (only falling back to them when no substance exists).
+    """
     if not text:
         return {
             "lines": [],
@@ -100,10 +125,13 @@ def summarize_output(text: str, max_lines: int = 6, max_width: int = 110) -> Dic
         if line.strip():
             non_empty_lines.append(line)
 
+    substantive = [line for line in non_empty_lines if not _is_noise_line(line)]
+    preview_lines = substantive or non_empty_lines
+
     visible = []
     truncated_lines = 0
     safe_width = max(24, max_width)
-    for line in non_empty_lines[:max_lines]:
+    for line in preview_lines[:max_lines]:
         if len(line) > safe_width:
             line = line[: safe_width - 3] + "..."
             truncated_lines += 1
@@ -113,7 +141,7 @@ def summarize_output(text: str, max_lines: int = 6, max_width: int = 110) -> Dic
         "lines": visible,
         "total_lines": len(raw_lines),
         "visible_lines": len(visible),
-        "hidden_lines": max(0, len(non_empty_lines) - len(visible)),
+        "hidden_lines": max(0, len(preview_lines) - len(visible)),
         "chars": len(text),
         "truncated_lines": truncated_lines,
     }
