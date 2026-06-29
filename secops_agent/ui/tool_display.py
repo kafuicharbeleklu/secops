@@ -703,6 +703,31 @@ class ToolResultBox:
             )
             elapsed = format_duration(result.execution_time) if result.execution_time > 0 else ""
 
+            # Lead the collapsed view with the parsed structured fact when the
+            # agent attached one (e.g. "3 service(s) on 10.10.10.5"), instead of
+            # a metrics line + raw output head. Raw detail stays under ctrl+o.
+            metadata = result.metadata or {}
+            parsed_summary = str(metadata.get("parsed_summary") or "").strip()
+            if parsed_summary:
+                safe_width = max(20, console.width - 8)
+                headline = parsed_summary.splitlines()[0]
+                if len(headline) > safe_width:
+                    headline = headline[: safe_width - 1] + "…"
+                console.print(
+                    f"  [{COLORS['text_muted']}]⎿  {escape(headline)}[/{COLORS['text_muted']}]"
+                    f" [{COLORS['text_dim']}](ctrl+o to expand)[/{COLORS['text_dim']}]"
+                )
+                for line in summary["lines"][:2]:
+                    if line.strip() and line.strip() != headline.strip():
+                        console.print(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]")
+                if summary["hidden_lines"]:
+                    console.print(
+                        f"     [{COLORS['text_dim']}]... {summary['hidden_lines']:,} more lines hidden[/{COLORS['text_dim']}]"
+                    )
+                if log_line:
+                    console.print(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
+                return
+
             if summary["total_lines"] == 1 and summary["lines"]:
                 line = summary["lines"][0]
                 console.print(

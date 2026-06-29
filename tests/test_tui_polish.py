@@ -1966,7 +1966,7 @@ class TUIPolishTests(unittest.TestCase):
         self.assertTrue(renderer._latest_transcript_expanded)
         self.assertEqual(renderer._latest_transcript_rendered_lines, 30)
 
-    def test_renderer_clears_transient_running_tool_row_before_result(self):
+    def test_renderer_tty_shows_tool_once_via_spinner_not_static_row(self):
         stream = io.StringIO()
         renderer = Renderer()
         renderer.console = Console(width=88, force_terminal=True, color_system=None, file=stream)
@@ -1983,8 +1983,10 @@ class TUIPolishTests(unittest.TestCase):
         asyncio.run(renderer.render_agent_stream(events()))
         output = stream.getvalue()
 
-        self.assertIn("● Bash(date) (ctrl+o to expand)", output)
-        self.assertIn("\x1b[1A\x1b[K", output)
+        # No static running row (and thus no premature tag / duplicate ●): the
+        # tool appears once, as the final result row.
+        self.assertNotIn("● Bash(date) (ctrl+o to expand)", output)
+        self.assertIn("● Bash(date)", output)
         self.assertIn("⎿  2 lines", output)
 
     def test_renderer_keeps_tool_expanded_when_result_arrives_after_ctrl_o(self):
@@ -2169,7 +2171,10 @@ class TUIPolishTests(unittest.TestCase):
         output = renderer.console.export_text()
 
         self.assertIn("Thought for", output)
-        self.assertIn("● Bash(date) (ctrl+o to expand)", output)
+        # Non-TTY: the static running row is shown (spinner does not animate
+        # here) but without the premature "(ctrl+o to expand)" tag.
+        self.assertIn("● Bash(date)", output)
+        self.assertNotIn("● Bash(date) (ctrl+o to expand)", output)
         thought_tail = output.split("Thought for", 1)[1]
         self.assertNotIn("\n\n● Bash(date)", thought_tail)
 

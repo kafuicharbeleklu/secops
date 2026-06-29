@@ -3706,12 +3706,22 @@ class Renderer:
                         self._current_tool_arguments = dict(event.arguments or {})
                     self._latest_transcript_expanded = False
                     self._clear_pending_tool_call_row()
-                    self._running_tool_row_lines = ToolCallBox.render_running(
-                        self.console,
-                        event.name,
-                        self._latest_tool_arguments,
-                        leading_blank=False,
-                    )
+                    # In a TTY the animated spinner (which now carries the tool
+                    # name) is the sole running indicator — skip the static ●
+                    # row to avoid a redundant double indicator and a premature
+                    # "(ctrl+o to expand)" tag. In a non-TTY (pipes, CI, captured
+                    # transcript) the spinner does not animate, so print the
+                    # static row there to keep the running tool visible.
+                    if bool(getattr(self.console, "is_terminal", False)):
+                        self._running_tool_row_lines = 0
+                    else:
+                        self._running_tool_row_lines = ToolCallBox.render_running(
+                            self.console,
+                            event.name,
+                            self._latest_tool_arguments,
+                            leading_blank=False,
+                            show_expand_tag=False,
+                        )
                     self._start_tool_feedback(event.name, status_right=status_right)
                     if getattr(event, "arguments", None):
                         self._current_tool_arguments = dict(event.arguments or {})
