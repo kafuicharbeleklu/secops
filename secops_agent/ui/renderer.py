@@ -271,9 +271,19 @@ def _build_collapsed_tool_result_lines(result: Any, *, width: int) -> list[str]:
     return lines
 
 
+def _result_headline(result: Any, fallback: str) -> str:
+    """Headline for a tool result: the parsed structured fact when present,
+    otherwise the given fallback. Keeps collapse and expand headlines in sync."""
+    metadata = getattr(result, "metadata", None) or {}
+    parsed = str(metadata.get("parsed_summary") or "").strip()
+    if parsed:
+        return parsed.splitlines()[0]
+    return fallback
+
+
 def _build_expanded_tool_result_lines(result: Any, *, width: int) -> list[str]:
     output_lines = _tool_output_lines(result)
-    first = _fit_cell(output_lines[0], max(16, width - 34))
+    first = _fit_cell(_result_headline(result, output_lines[0]), max(16, width - 34))
     lines = [f"  [{COLORS['text_muted']}]⎿  {escape(first)} (ctrl+o to collapse)[/{COLORS['text_muted']}]"]
     if len(output_lines) > 1:
         visible_limit = _ctrl_o_output_visible_limit()
@@ -3110,7 +3120,7 @@ class Renderer:
         output = str(getattr(result, "output", "") or getattr(result, "error", "") or "(no output)")
         output = supervised_detail_text(getattr(result, "metadata", None), output)
         lines = [line.rstrip() for line in output.splitlines() if line.strip()] or ["(no output)"]
-        first_line = _fit_cell(lines[0], max(16, _surface_width(self.console) - 34))
+        first_line = _fit_cell(_result_headline(result, lines[0]), max(16, _surface_width(self.console) - 34))
         self.console.print(
             f"  [{COLORS['text_muted']}]⎿  {escape(first_line)} "
             f"(ctrl+o to collapse)[/{COLORS['text_muted']}]",
