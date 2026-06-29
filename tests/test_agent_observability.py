@@ -59,6 +59,27 @@ class AgentObservabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("llm_retry_scheduled", trace_events)
         self.assertIn("llm_request_completed", trace_events)
 
+    async def test_llm_500_internal_error_is_retried(self):
+        sink = InMemoryTraceSink()
+        llm = ErrorThenTextLLM(
+            "Gemini API Error: 500 INTERNAL. {'error': {'code': 500, "
+            "'message': 'Internal error encountered.', 'status': 'INTERNAL'}}"
+        )
+        agent = SecOpsAgent(
+            llm=llm,
+            registry=ToolRegistry(),
+            memory=ConversationMemory(),
+            trace_sink=sink,
+            llm_retry_base_seconds=0,
+        )
+
+        events = [event async for event in agent.stream_response("scan the host")]
+        text = "".join(event.content for event in events if isinstance(event, TextEvent))
+
+        self.assertEqual(llm.calls, 2)
+        self.assertIn("ok", text)
+        self.assertIn("llm_retry_scheduled", [event["event"] for event in sink.events])
+
     async def test_llm_invalid_argument_error_is_not_retried(self):
         sink = InMemoryTraceSink()
         llm = AlwaysErrorLLM("Gemini API Error: 400 INVALID_ARGUMENT.")

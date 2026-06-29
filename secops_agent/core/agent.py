@@ -387,12 +387,14 @@ class SecOpsAgent:
             return False
         retriable = (
             "429",
+            "500",
             "502",
             "503",
             "504",
             "capacity",
             "deadline",
             "high traffic",
+            "internal",  # Gemini "500 INTERNAL" is transient — retry with backoff
             "rate limit",
             "resource_exhausted",
             "temporarily unavailable",
