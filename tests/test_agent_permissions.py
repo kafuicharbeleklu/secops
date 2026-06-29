@@ -946,5 +946,73 @@ class AgentPermissionTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class _RepeatToolLLM:
+    """Re-issues the identical tool call on every turn — simulates a stalled loop."""
+
+    model_name = "fake-model"
+
+    def __init__(self, name: str, arguments: dict | None = None):
+        self.name = name
+        self.arguments = arguments or {}
+        self.calls = 0
+
+    def prepare_for_prompt(self, prompt: str, **kwargs):
+        return None
+
+    async def stream_chat(self, messages, tools_schema=None):
+        self.calls += 1
+        yield StreamChunk(
+            tool_call=ToolCallChunk(
+                name=self.name, arguments=dict(self.arguments), id=f"call_{self.calls}"
+            )
+        )
+
+
+class LoopConvergenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_repeated_identical_tool_call_stops_before_max_iterations(self):
+        runs = {"n": 0}
+
+        async def probe(**_):
+            runs["n"] += 1
+            return "identical-result"
+
+        registry = ToolRegistry()
+        registry.register(
+            name="probe",
+            description="probe tool",
+            category=ToolCategory.SYSTEM,
+            parameters={},
+            func=probe,
+            dangerous=False,
+        )
+        permissions = PermissionEngine()
+        permissions.remember(
+            PermissionResource(kind="tool", name="probe"), PermissionDecision.ALLOW
+        )
+        agent = SecOpsAgent(
+            _RepeatToolLLM("probe", {"x": "1"}),
+            registry,
+            ConversationMemory(),
+            permissions=permissions,
+            max_iterations=10,
+        )
+
+        events = []
+        async for event in agent.stream_response("keep probing the same thing"):
+            events.append(event)
+            if isinstance(event, ApprovalRequestEvent):
+                event.approval_future.set_result(ApprovalDecision(allowed=True))
+
+        # The circular call is allowed once to retry, then the loop stops — well
+        # short of max_iterations (10) instead of burning every iteration.
+        self.assertLessEqual(runs["n"], 3)
+        texts = "".join(e.content for e in events if isinstance(e, TextEvent))
+        self.assertIn("stopped to avoid a loop", texts)
+        error_texts = " ".join(
+            str(getattr(e, "error", "")) for e in events if type(e).__name__ == "ErrorEvent"
+        )
+        self.assertNotIn("Max iterations", error_texts)
+
+
 if __name__ == "__main__":
     unittest.main()
