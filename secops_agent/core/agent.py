@@ -31,7 +31,7 @@ from secops_agent.core.experience import build_lesson_from_tool_result, build_su
 from secops_agent.core.hooks import HookManager
 from secops_agent.core.observability import StructuredTracer, TraceSink, trace_sink_from_settings
 from secops_agent.core.mission import ActionTraceEntry
-from secops_agent.core.autonomy import AutonomyPolicy
+from secops_agent.core.autonomy import AutonomyLevel, AutonomyPolicy
 from secops_agent.core.planner import MissionPlanner, NextAction
 from secops_agent.core.request_context import (
     RequestDecision,
@@ -214,7 +214,7 @@ class SecOpsAgent:
         memory: ConversationMemory,
         permissions: PermissionEngine | None = None,
         hooks: HookManager | None = None,
-        max_iterations: int = 10,
+        max_iterations: int = 14,
         structured_memory: Any | None = None,
         result_parser: Any | None = None,
         planner: MissionPlanner | None = None,
@@ -311,6 +311,28 @@ class SecOpsAgent:
         if not plain:
             return False
         return any(cue in plain for cue in SecOpsAgent._ACTION_ANNOUNCEMENT_CUES)
+
+    # Directory names that signal an attack surface vs. static noise, used to
+    # prioritise gobuster candidates like an analyst instead of just listing them.
+    _DIR_HIGH_VALUE = (
+        "admin", "panel", "upload", "dashboard", "login", "manage", "cms",
+        "dev", "backup", "config", "phpmyadmin", "wp-admin", "api", "secret",
+        "private", "portal", "console", "internal", "test",
+    )
+    _DIR_NOISE = (
+        "css", "js", "javascript", "image", "img", "font", "asset",
+        "static", "icon", "style", "vendor", "node_modules",
+    )
+
+    @staticmethod
+    def _dir_candidate_score(path: str) -> int:
+        """Rank a discovered web path: 2 = likely attack surface, 0 = static noise."""
+        p = str(path or "").strip().strip("/").casefold()
+        if any(marker in p for marker in SecOpsAgent._DIR_HIGH_VALUE):
+            return 2
+        if any(marker in p for marker in SecOpsAgent._DIR_NOISE):
+            return 0
+        return 1
 
     @staticmethod
     def _strip_mission_state_sections(text: str) -> str:
@@ -776,6 +798,22 @@ class SecOpsAgent:
             return self.autonomy
         return AutonomyPolicy.for_environment(decision.environment_hint)
 
+    def set_autonomy_for_permission_mode(self, mode: str) -> None:
+        """Align autonomy with the active permission mode.
+
+        Free-execution modes (``always-proceed`` / ``proceed-in-sandbox``) imply
+        an authorised target, so escalate to SANDBOX autonomy — which exposes
+        high-risk tool *schemas* to the model. Execution stays gated by the
+        PermissionEngine. Other modes restore adaptive, environment-based
+        autonomy so a trusted lab/CTF still escalates on its own.
+        """
+        if mode in {"always-proceed", "proceed-in-sandbox"}:
+            self.autonomy = AutonomyPolicy(level=AutonomyLevel.SANDBOX)
+            self._autonomy_explicit = True
+        else:
+            self.autonomy = AutonomyPolicy()
+            self._autonomy_explicit = False
+
     def _relevant_lessons_briefing(self, mission: Any) -> str:
         """Prime the model with relevant prior lessons (memory briefing, §5).
 
@@ -807,7 +845,12 @@ class SecOpsAgent:
         # until the user has approved a plan. The PermissionEngine still gates
         # any exposed tool at execution time.
         if not self._autonomy_for_turn(decision).exposes_tool_schemas(decision):
-            return []
+            # §7 withholds the high-risk schemas until a plan is approved, but we
+            # must never blind the model: expose the safe baseline floor so it can
+            # keep working (recon/enum) instead of receiving an empty toolset —
+            # which previously let Google Search grounding hijack the turn and made
+            # the agent report it "only has google:search".
+            return self.registry.get_tools_schema(self._safe_baseline_tool_names())
         selection = self.tool_schema_selector.select(decision)
         # Goal-specific tools rank first, then the safe baseline as a floor so a
         # vague request ("scan", "check this host") still exposes a usable
@@ -1036,11 +1079,21 @@ class SecOpsAgent:
                     if path and path not in interesting_paths:
                         interesting_paths.append(path)
             if interesting_paths:
+                ranked = sorted(
+                    interesting_paths[:8], key=self._dir_candidate_score, reverse=True
+                )
                 lines.append(
                     "2. Candidat(s) hidden directory: "
-                    + ", ".join(f"`{path}`" for path in interesting_paths[:5])
+                    + ", ".join(f"`{path}`" for path in ranked[:5])
                     + "."
                 )
+                best = ranked[0]
+                if self._dir_candidate_score(best) >= 2:
+                    lines.append(
+                        f"   → Priorité: `{best}` — nom évocateur d'une interface "
+                        "(admin/upload/login), vecteur d'exploitation le plus probable. "
+                        "Ressources statiques (css/js) et endpoints en 403 à écarter."
+                    )
             else:
                 lines.append("2. Aucun candidat hidden directory évident dans les résultats parsés.")
 
@@ -1532,6 +1585,8 @@ class SecOpsAgent:
         local_preflight_calls = self._local_preflight_tool_calls(user_input)
         text_only_followup_after_tools = False
         announced_action_retry_used = False
+        previous_iter_signatures: tuple[str, ...] = ()
+        repeated_iteration_streak = 0
         while iteration < self.max_iterations:
             iteration += 1
             tools_were_offered = False
@@ -1695,6 +1750,31 @@ class SecOpsAgent:
 
             if no_tools_this_iter:
                 self.memory.add_assistant_message(current_response_text)
+                break
+
+            # Convergence guard: if the model re-issues the identical tool calls
+            # iteration after iteration, it is looping without progress. Allow one
+            # repeat, then stop with an explanation instead of silently burning
+            # through max_iterations on a circular call.
+            current_iter_signatures = tuple(sorted(
+                f"{tc.name}:{sorted(tc.arguments.items())!r}" for tc in tool_calls_to_run
+            ))
+            if current_iter_signatures and current_iter_signatures == previous_iter_signatures:
+                repeated_iteration_streak += 1
+            else:
+                repeated_iteration_streak = 0
+            previous_iter_signatures = current_iter_signatures
+
+            if repeated_iteration_streak >= 2:
+                stall_msg = (
+                    "I repeated the same tool call without making progress, so I "
+                    "stopped to avoid a loop. The last action did not change the "
+                    "result — a different approach or input is needed."
+                )
+                if current_response_text.strip():
+                    self.memory.add_assistant_message(current_response_text)
+                self.memory.add_assistant_message(stall_msg)
+                yield TextEvent(content=stall_msg)
                 break
 
             # Store assistant message with tool calls

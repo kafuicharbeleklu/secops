@@ -606,6 +606,10 @@ class GeminiProvider:
     @staticmethod
     def _prompt_needs_google_search(prompt: str) -> bool:
         lowered = str(prompt or "").casefold()
+        # Only genuine "current/web information" intent should enable grounding.
+        # Broad words like "web", "search", "recherche", "docs", "online" are
+        # ubiquitous in security work ("serveur web", "recherche les répertoires")
+        # and previously evicted the entire toolset in favour of google_search.
         markers = (
             "actualite",
             "actualité",
@@ -613,18 +617,11 @@ class GeminiProvider:
             "cve-",
             "derniere",
             "dernière",
-            "docs",
-            "en ligne",
             "google",
             "internet",
             "latest",
             "maintenant",
-            "online",
-            "recherche",
-            "search",
             "site officiel",
-            "sur le net",
-            "web",
         )
         return any(marker in lowered for marker in markers)
 

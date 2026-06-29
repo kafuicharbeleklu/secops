@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import os
 import sys
+import json
 import asyncio
 import signal
 import platform
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 import typer
 from rich.text import Text
@@ -438,6 +439,9 @@ def _statusline_payload(agent: SecOpsAgent, runtime: RuntimeState) -> dict[str, 
 def _apply_permission_mode(mode: str, agent: SecOpsAgent, runtime: RuntimeState) -> None:
     agent.permissions.reset_session()
     runtime.permission_mode = mode
+    # Keep autonomy in step with the permission mode: free-execution modes imply
+    # an authorised target and must expose high-risk tool schemas to the model.
+    agent.set_autonomy_for_permission_mode(mode)
 
     if mode == "request-review":
         runtime.sandbox_enabled = False
@@ -813,6 +817,7 @@ async def _run_print_prompt(
     runtime: RuntimeState,
     prompt: str,
     timeout_seconds: float,
+    output_format: str = "text",
 ) -> None:
     clean_prompt = prompt.strip()
     if not clean_prompt:
@@ -820,9 +825,19 @@ async def _run_print_prompt(
     if timeout_seconds <= 0:
         raise ValueError("--print-timeout must be greater than zero.")
 
+    json_mode = str(output_format or "text").strip().lower() == "json"
     _load_runtime_extensions(runtime, agent)
 
+    # JSON mode collects a lossless record (full tool outputs included) instead of
+    # the collapsed text stream — the machine-readable counterpart Antigravity CLI
+    # exposes via `--output-format json`.
+    collected_text: list[str] = []
+    collected_tools: list[dict[str, Any]] = []
+    collected_actions: list[str] = []
+    error_text: str | None = None
+
     async def consume() -> bool:
+        nonlocal error_text
         emitted_text = False
         attachment_parts = build_attachment_model_parts(runtime)
         event_stream = _track_agent_artifacts(
@@ -834,25 +849,47 @@ async def _run_print_prompt(
         )
         async for event in event_stream:
             if isinstance(event, TextEvent) and event.content:
-                sys.stdout.write(event.content)
-                sys.stdout.flush()
+                if json_mode:
+                    collected_text.append(event.content)
+                else:
+                    sys.stdout.write(event.content)
+                    sys.stdout.flush()
                 emitted_text = True
+            elif isinstance(event, ToolResultEvent):
+                if json_mode:
+                    result = event.result
+                    collected_tools.append({
+                        "name": event.name,
+                        "success": bool(getattr(result, "success", False)),
+                        "output": str(getattr(result, "output", "") or ""),
+                        "error": getattr(result, "error", None),
+                        "execution_time": float(getattr(result, "execution_time", 0.0) or 0.0),
+                    })
             elif isinstance(event, SuggestedActionsEvent):
-                lines = ["\nSuggested next actions:"]
-                for index, action in enumerate(event.actions[:5], 1):
-                    lines.append(f"{index}. {getattr(action, 'title', 'Next action')}")
-                lines.append("Reply with a number or describe what to do next.")
-                sys.stdout.write("\n".join(lines) + "\n")
-                sys.stdout.flush()
-                emitted_text = True
+                if json_mode:
+                    collected_actions.extend(
+                        getattr(action, "title", "Next action") for action in event.actions[:5]
+                    )
+                else:
+                    lines = ["\nSuggested next actions:"]
+                    for index, action in enumerate(event.actions[:5], 1):
+                        lines.append(f"{index}. {getattr(action, 'title', 'Next action')}")
+                    lines.append("Reply with a number or describe what to do next.")
+                    sys.stdout.write("\n".join(lines) + "\n")
+                    sys.stdout.flush()
+                    emitted_text = True
             elif isinstance(event, ApprovalRequestEvent):
                 if event.approval_future and not event.approval_future.done():
                     event.approval_future.set_result(ApprovalDecision(allowed=False))
-                typer.echo(
-                    f"Permission denied in --print mode: {event.resource.value}",
-                    err=True,
-                )
+                if not json_mode:
+                    typer.echo(
+                        f"Permission denied in --print mode: {event.resource.value}",
+                        err=True,
+                    )
             elif isinstance(event, ErrorEvent):
+                if json_mode:
+                    error_text = str(event.error)
+                    break
                 raise RuntimeError(event.error)
         return emitted_text
 
@@ -860,6 +897,22 @@ async def _run_print_prompt(
         emitted = await asyncio.wait_for(consume(), timeout=timeout_seconds)
     except asyncio.TimeoutError as exc:
         raise TimeoutError(f"--print timed out after {timeout_seconds:g}s.") from exc
+
+    if json_mode:
+        payload = {
+            "prompt": clean_prompt,
+            "model": getattr(agent.llm, "model_name", ""),
+            "response": "".join(collected_text).strip(),
+            "tools": collected_tools,
+            "suggested_actions": collected_actions,
+            "error": error_text,
+        }
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        sys.stdout.flush()
+        if error_text:
+            raise RuntimeError(error_text)
+        return
+
     if emitted:
         sys.stdout.write("\n")
         sys.stdout.flush()
@@ -1481,6 +1534,11 @@ def main(
         help="Run one prompt non-interactively and print the response.",
     ),
     print_timeout: float = typer.Option(300.0, "--print-timeout", help="Timeout in seconds for --print mode."),
+    output_format: str = typer.Option(
+        "text",
+        "--output-format",
+        help="Output format for --print: 'text' (default) or 'json' (lossless, includes full tool outputs).",
+    ),
     prompt_interactive: Optional[str] = typer.Option(
         None,
         "--prompt-interactive",
@@ -1578,7 +1636,7 @@ def main(
             _apply_loaded_runtime_controls(agent, runtime)
             _restore_runtime_artifacts_after_load(runtime, agent.memory)
         try:
-            asyncio.run(_run_print_prompt(agent, runtime, print_prompt, print_timeout))
+            asyncio.run(_run_print_prompt(agent, runtime, print_prompt, print_timeout, output_format))
         except (RuntimeError, TimeoutError, ValueError) as exc:
             typer.echo(f"✗ {exc}", err=True)
             raise typer.Exit(code=1) from exc

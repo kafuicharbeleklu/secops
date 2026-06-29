@@ -226,14 +226,21 @@ What is the hidden directory?
         self.assertTrue(llm.called)
         self.assertFalse(any(isinstance(event, ToolCallEvent) for event in events))
 
-    async def test_exploit_request_sends_no_function_tools_by_default(self):
+    async def test_exploit_request_exposes_safe_baseline_not_offensive_primitives(self):
         llm = CapturingLLM()
         registry = _registry_with_tools("generate_payload", "run_shell", "nmap_scan", "dir_brute")
         agent = SecOpsAgent(llm, registry, ConversationMemory(), permissions=PermissionEngine())
 
         await _collect(agent, "upload a webshell and get a reverse shell")
 
-        self.assertEqual([], llm.tools_schema)
+        names = {s["name"] for s in llm.tools_schema}
+        # The model is never blinded: the safe recon/enum floor is always exposed
+        # so it cannot fall back to an empty toolset (and let grounding hijack).
+        self.assertIn("nmap_scan", names)
+        self.assertIn("dir_brute", names)
+        # Offensive primitives stay behind the autonomy gate until sandbox/approved.
+        self.assertNotIn("generate_payload", names)
+        self.assertNotIn("run_shell", names)
         self.assertEqual("exploit_step", llm.context["technical_goal"])
 
     async def test_archived_tool_markers_are_not_rendered_as_current_actions(self):
@@ -379,15 +386,57 @@ class SafeBaselineToolExposureTests(unittest.TestCase):
         self.assertEqual(names[0], "ping_host")
         self.assertLess(names.index("nmap_scan"), names.index("hash_identify"))
 
-    def test_unapproved_exploit_request_still_withholds_all_schemas(self):
+    def test_unapproved_exploit_exposes_safe_baseline_not_offensive_primitives(self):
         from secops_agent.core.request_context import classify_request
 
         agent = self._agent()
         decision = classify_request("upload a php webshell and get a reverse shell")
+        names = {s["name"] for s in agent._tools_schema_for_decision(decision)}
 
-        # EXPLOIT risk without approval → AutonomyPolicy withholds everything,
-        # including the safe baseline floor.
-        self.assertEqual(agent._tools_schema_for_decision(decision), [])
+        # EXPLOIT risk without approval → high-risk schemas are withheld, but the
+        # safe baseline floor is still exposed so the model is never blinded.
+        self.assertIn("nmap_scan", names)
+        self.assertIn("hash_identify", names)
+        self.assertNotIn("webshell_exec", names)
+        self.assertNotIn("generate_payload", names)
+        self.assertNotIn("start_listener", names)
+        self.assertNotIn("run_shell", names)
+
+    def test_sandbox_autonomy_exposes_offensive_primitives(self):
+        from secops_agent.core.request_context import classify_request
+
+        agent = self._agent()
+        decision = classify_request("upload a php webshell and get a reverse shell")
+        withheld = {s["name"] for s in agent._tools_schema_for_decision(decision)}
+
+        # Free-execution modes imply an authorised target → SANDBOX autonomy,
+        # which exposes the offensive primitives the gated path withholds.
+        agent.set_autonomy_for_permission_mode("always-proceed")
+        exposed = {s["name"] for s in agent._tools_schema_for_decision(decision)}
+
+        self.assertTrue(withheld <= exposed)
+        self.assertTrue(exposed - withheld, "sandbox should expose additional high-risk tools")
+        self.assertIn("webshell_exec", exposed)
+
+
+class DirCandidatePrioritisationTests(unittest.TestCase):
+    """P3-A: gobuster answers prioritise an attack surface instead of flat-listing."""
+
+    def test_attack_surface_scores_above_static_noise(self):
+        from secops_agent.core.agent import SecOpsAgent
+
+        for high in ("/panel", "/uploads", "/admin", "/dev/backup"):
+            self.assertEqual(SecOpsAgent._dir_candidate_score(high), 2, high)
+        for noise in ("/css", "/js", "/assets", "/static"):
+            self.assertEqual(SecOpsAgent._dir_candidate_score(noise), 0, noise)
+        self.assertEqual(SecOpsAgent._dir_candidate_score("/server-status"), 1)
+
+    def test_best_candidate_is_the_attack_surface(self):
+        from secops_agent.core.agent import SecOpsAgent
+
+        paths = ["/css", "/server-status", "/panel", "/uploads", "/js"]
+        best = sorted(paths, key=SecOpsAgent._dir_candidate_score, reverse=True)[0]
+        self.assertEqual(best, "/panel")
 
 
 class _FakeLessonStore:
@@ -534,14 +583,18 @@ class EnvironmentAwareAutonomyTests(unittest.TestCase):
         self.assertEqual(policy.level, AutonomyLevel.RISK_BASED)
         self.assertTrue(policy.pauses_for(decision.risk))
 
-    def test_unapproved_exploit_in_lab_still_withholds_schemas(self):
+    def test_unapproved_exploit_in_lab_exposes_safe_baseline_not_offensive(self):
         from secops_agent.core.request_context import classify_request
 
         agent = self._agent()
         decision = classify_request("upload a php webshell on the HackTheBox machine")
+        names = {s["name"] for s in agent._tools_schema_for_decision(decision)}
 
-        # CTF escalates to supervised, but an unapproved exploit is still withheld.
-        self.assertEqual(agent._tools_schema_for_decision(decision), [])
+        # CTF escalates to supervised: the safe baseline is exposed, but an
+        # unapproved exploit's offensive primitives are still withheld.
+        self.assertIn("nmap_scan", names)
+        self.assertNotIn("webshell_exec", names)
+        self.assertNotIn("run_shell", names)
 
     def test_explicit_policy_overrides_environment_adaptation(self):
         from secops_agent.core.autonomy import AutonomyLevel, AutonomyPolicy
