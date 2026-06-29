@@ -3096,6 +3096,13 @@ class Renderer:
         if not self._latest_tool_name:
             return False
 
+        # Clear the currently-drawn collapsed block so the expansion replaces it
+        # in place, rather than stacking below and leaving leftover preview
+        # lines (e.g. a dangling "── OS ──"). No-op when already cleared.
+        if bool(getattr(self.console, "is_terminal", False)) and self._latest_transcript_rendered_lines > 0:
+            if self._clear_terminal_lines(self._latest_transcript_rendered_lines):
+                self._latest_transcript_rendered_lines = 0
+
         call_text = format_tool_call_text(self._latest_tool_name, self._latest_tool_arguments)
         result = self._latest_tool_result
         indicator_color = _tool_status_color(status=_tool_result_status(result))
@@ -3171,14 +3178,31 @@ class Renderer:
             return True
         return self._render_inline_thought_expansion()
 
+    def _draw_collapsed_result(self) -> int:
+        """Draw the collapsed ● + ⎿ result block; return the lines printed."""
+        status = _tool_result_status(self._latest_tool_result)
+        n = ToolCallBox.render(
+            self.console,
+            self._latest_tool_name,
+            self._latest_tool_arguments,
+            status=status,
+            leading_blank=False,
+            show_expand_tag=(status == "error"),
+        )
+        if self._latest_tool_result is not None:
+            n += ToolResultBox.render(self.console, self._latest_tool_name, self._latest_tool_result)
+        return n
+
     def _render_inline_tool_collapse(self) -> bool:
         if not self._latest_tool_name:
             return False
         rendered_lines = self._latest_transcript_rendered_lines
         cleared = self._clear_terminal_lines(rendered_lines)
         if cleared:
-            self._latest_transcript_rendered_lines = 0
+            # Redraw the collapsed block in place of the cleared expansion so
+            # the toggle replaces (rather than stacks) the view.
             self._latest_transcript_expanded = False
+            self._latest_transcript_rendered_lines = self._draw_collapsed_result()
             return True
         if bool(getattr(self.console, "is_terminal", False)) and rendered_lines > 0:
             return True
@@ -3781,6 +3805,7 @@ class Renderer:
                     had_pending_call = self._pending_tool_call_lines > 0
                     pending_call_cleared = self._clear_pending_tool_call_row()
                     result_status = _tool_result_status(event.result)
+                    collapsed_line_count = 0
                     if keep_result_expanded and expanded_surface_cleared:
                         self._render_inline_tool_expansion()
                     elif keep_result_expanded and bool(getattr(self.console, "is_terminal", False)):
@@ -3789,7 +3814,7 @@ class Renderer:
                         # ✅ agy grouping: suppress (ctrl+o) on the ● line when the
                         # ⎿ result summary below carries it. Error results render
                         # inline without that affordance, so the ● line keeps it.
-                        ToolCallBox.render(
+                        collapsed_line_count += ToolCallBox.render(
                             self.console,
                             event.name,
                             self._latest_tool_arguments,
@@ -3798,7 +3823,13 @@ class Renderer:
                             show_expand_tag=(result_status == "error"),
                         )
                     if not keep_result_expanded:
-                        ToolResultBox.render(self.console, event.name, event.result)
+                        # Track the collapsed block's exact line count so the
+                        # ctrl+o toggle can clear it before drawing the
+                        # expansion (no leftover preview lines).
+                        collapsed_line_count += ToolResultBox.render(
+                            self.console, event.name, event.result
+                        )
+                        self._latest_transcript_rendered_lines = collapsed_line_count
                     _finish_tool_task(event)
                     self._tool_start = None
                     count_tail_after_latest_tool = True

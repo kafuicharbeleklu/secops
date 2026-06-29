@@ -656,7 +656,16 @@ class ToolResultBox:
     _WRITE_TOOL_NAMES = {"write_file", "create_file", "WriteFile", "Create"}
 
     @staticmethod
-    def render(console: Console, tool_name: str, result: ToolResult):
+    def render(console: Console, tool_name: str, result: ToolResult) -> int:
+        """Render the collapsed result block. Returns the number of lines
+        printed so the ctrl+o toggle can clear it before drawing the expansion."""
+        printed = 0
+
+        def emit(*args: Any, **kwargs: Any) -> None:
+            nonlocal printed
+            console.print(*args, **kwargs)
+            printed += 1
+
         text_failure = result.success and _looks_like_tool_failure(result.output)
         log_line = _tool_result_log_reference_line(result, max_width=console.width)
         if result.success and not text_failure:
@@ -672,7 +681,7 @@ class ToolResultBox:
                 n_lines = int(lines_written) if lines_written else len(content_lines)
                 summary_verb = "Added" if n_lines > 0 else "Wrote"
                 line_label = "line" if n_lines == 1 else "lines"
-                console.print(
+                emit(
                     f"  [{COLORS['text_muted']}]⎿  {summary_verb} {n_lines} {line_label}[/{COLORS['text_muted']}]"
                 )
                 # Show up to 6 content lines with real line numbers and + prefix
@@ -683,17 +692,17 @@ class ToolResultBox:
                     display_line = content_line.rstrip()
                     if len(display_line) > safe_width:
                         display_line = display_line[:safe_width - 3] + "..."
-                    console.print(
+                    emit(
                         f"     [{COLORS['text_dim']}]{line_no:>4}[/{COLORS['text_dim']}] "
                         f"[{COLORS['success']}]+    {escape(display_line)}[/{COLORS['success']}]"
                     )
                 if len(content_lines) > max_display:
-                    console.print(
+                    emit(
                         f"     [{COLORS['text_dim']}]... {len(content_lines) - max_display:,} more lines[/{COLORS['text_dim']}]"
                     )
                 if log_line:
-                    console.print(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
-                return
+                    emit(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
+                return printed
 
             # ── Standard result rendering ──
             summary = summarize_output(
@@ -713,29 +722,29 @@ class ToolResultBox:
                 headline = parsed_summary.splitlines()[0]
                 if len(headline) > safe_width:
                     headline = headline[: safe_width - 1] + "…"
-                console.print(
+                emit(
                     f"  [{COLORS['text_muted']}]⎿  {escape(headline)}[/{COLORS['text_muted']}]"
                     f" [{COLORS['text_dim']}](ctrl+o to expand)[/{COLORS['text_dim']}]"
                 )
                 for line in summary["lines"][:2]:
                     if line.strip() and line.strip() != headline.strip():
-                        console.print(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]")
+                        emit(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]")
                 if summary["hidden_lines"]:
-                    console.print(
+                    emit(
                         f"     [{COLORS['text_dim']}]... {summary['hidden_lines']:,} more lines hidden[/{COLORS['text_dim']}]"
                     )
                 if log_line:
-                    console.print(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
-                return
+                    emit(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
+                return printed
 
             if summary["total_lines"] == 1 and summary["lines"]:
                 line = summary["lines"][0]
-                console.print(
+                emit(
                     f"  [{COLORS['text_muted']}]⎿  {escape(line)}[/{COLORS['text_muted']}]"
                 )
                 if log_line:
-                    console.print(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
-                return
+                    emit(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
+                return printed
 
             use_single_line = False
             metrics = []
@@ -749,26 +758,26 @@ class ToolResultBox:
                 metrics.append("passive")
 
             details = " · ".join(metrics) if metrics else "done"
-            console.print(
+            emit(
                 f"  [{COLORS['text_muted']}]⎿  {details}[/{COLORS['text_muted']}]"
                 f" [{COLORS['text_dim']}](ctrl+o to expand)[/{COLORS['text_dim']}]"
             )
 
             if summary["lines"]:
                 for line in summary["lines"]:
-                    console.print(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]")
+                    emit(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]")
                 if summary["hidden_lines"]:
-                    console.print(
+                    emit(
                         f"     [{COLORS['text_dim']}]... {summary['hidden_lines']:,} more lines hidden[/{COLORS['text_dim']}]"
                     )
                 elif summary["truncated_lines"]:
-                    console.print(
+                    emit(
                         f"     [{COLORS['text_dim']}]... truncated to terminal width[/{COLORS['text_dim']}]"
                     )
             elif not summary["chars"]:
-                console.print(f"     [{COLORS['text_dim']}]no output[/{COLORS['text_dim']}]")
+                emit(f"     [{COLORS['text_dim']}]no output[/{COLORS['text_dim']}]")
             else:
-                console.print(f"     [{COLORS['text_dim']}]no printable lines[/{COLORS['text_dim']}]")
+                emit(f"     [{COLORS['text_dim']}]no printable lines[/{COLORS['text_dim']}]")
             # Log reference line suppressed — output summary above is sufficient.
         else:
             # Show error inline
@@ -776,11 +785,13 @@ class ToolResultBox:
             if len(error_msg) > 120:
                 error_msg = error_msg[:117] + "..."
             elapsed = f" ({format_duration(result.execution_time)})" if result.execution_time > 0 else ""
-            console.print(
+            emit(
                 f"  [{COLORS['error']}]⎿  {escape(error_msg)}{elapsed}[/{COLORS['error']}]"
             )
             if log_line:
-                console.print(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
+                emit(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
+
+        return printed
 
 
 # ── Approval Prompt ───────────────────────────────────────────────────

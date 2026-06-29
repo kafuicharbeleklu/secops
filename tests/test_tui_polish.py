@@ -1989,6 +1989,37 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("● Bash(date)", output)
         self.assertIn("⎿  2 lines", output)
 
+    def test_tool_result_box_render_returns_exact_line_count(self):
+        # The ctrl+o toggle clears the collapsed block by line count, so the
+        # returned count must equal the lines actually printed (else leftover
+        # lines like a dangling "── OS ──" leak on expand).
+        cases = [
+            # parsed_summary lead + preview lines + hidden notice
+            (
+                "🖥️  System Information\n── OS ──\n  Hostname: ubuntu\n"
+                + "\n".join(f"  k{i}: v" for i in range(20)),
+                {"parsed_summary": "Hostname: ubuntu"},
+            ),
+            ("single line only", {}),  # single-line branch
+            ("\n".join(f"line {i}" for i in range(12)), {}),  # metrics branch
+        ]
+        for output, meta in cases:
+            stream = io.StringIO()
+            console = Console(width=200, force_terminal=False, file=stream)
+            n = ToolResultBox.render(
+                console,
+                "sysinfo",
+                ToolResult(success=True, output=output, execution_time=1.0, metadata=meta),
+            )
+            printed = len(stream.getvalue().splitlines())
+            self.assertEqual(n, printed, f"line-count mismatch for metadata={meta}")
+
+        # error branch
+        stream = io.StringIO()
+        console = Console(width=200, force_terminal=False, file=stream)
+        n = ToolResultBox.render(console, "x", ToolResult(success=False, output="", error="boom"))
+        self.assertEqual(n, len(stream.getvalue().splitlines()))
+
     def test_renderer_keeps_tool_expanded_when_result_arrives_after_ctrl_o(self):
         from secops_agent.ui.renderer import _TranscriptToggleRequest
 
