@@ -175,7 +175,9 @@ def _build_nmap_cmd(
             if not has_meta and not is_blocked:
                 cmd.append(arg)
 
-    cmd.extend(["-T4", "--reason", target])
+    # No --reason: nmap's reason column ("syn-ack") would otherwise be parsed
+    # into the service version and leak into answers ("http syn-ack Apache ...").
+    cmd.extend(["-T4", target])
     return cmd
 
 
