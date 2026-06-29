@@ -1329,7 +1329,8 @@ def parse_generic_output(raw: str, args: Dict[str, Any]) -> ParsedResult:
     elif len(lines) <= 4 and len(clean) <= 400:
         summary = clean
     else:
-        summary = lines[0][:200]
+        lead = _first_informative_line(lines)
+        summary = lead[:200]
         if len(lines) > 1:
             summary += f"  (+{len(lines) - 1} more line(s))"
 
@@ -1338,6 +1339,35 @@ def parse_generic_output(raw: str, args: Dict[str, Any]) -> ParsedResult:
         raw_output=raw,
         summary=summary,
     )
+
+
+def _first_informative_line(lines: list[str]) -> str:
+    """Pick the most useful line to lead a collapsed preview.
+
+    Prefer the first ``key: value`` fact (e.g. ``Hostname: ubuntu-desktop``),
+    skipping decorative banners (``🖥️ System Information``) and section rules
+    (``── OS ──``) that read as noise rather than information.
+    """
+    def is_banner_or_rule(text: str) -> bool:
+        stripped = text.strip()
+        # Section rule like "── OS ──": mostly box-drawing around a short label.
+        core = stripped.strip("─-=_~ ").strip()
+        if core != stripped and len(core) <= 16:
+            return True
+        # Emoji/symbol banner with no value (no colon), e.g. "🖥️ System Information".
+        if ":" not in stripped and not stripped[:1].isascii():
+            return True
+        return False
+
+    for line in lines:
+        stripped = line.strip()
+        before, sep, after = stripped.partition(":")
+        if sep and after.strip() and any(ch.isalnum() for ch in before):
+            return stripped
+    for line in lines:
+        if not is_banner_or_rule(line):
+            return line.strip()
+    return lines[0].strip()
 
 
 # ---------------------------------------------------------------------------

@@ -280,6 +280,21 @@ Apache HTTP Server 2.4.50 - Remote Code Execution   | multiple/remote/50406.py
         self.assertTrue(parsed.summary.startswith("line 1"))
         self.assertIn("+19 more line(s)", parsed.summary)
 
+    def test_generic_parser_lead_skips_banner_and_section_rule(self):
+        raw = (
+            "🖥️  System Information\n"
+            "── OS ──\n"
+            "  Hostname: ubuntu-desktop\n"
+            "  OS: Ubuntu 26.04 LTS\n"
+        ) + "\n".join(f"  detail{i}: value" for i in range(10))
+
+        parsed = self.parser.parse("sysinfo", raw, {})
+
+        # Leads with the first key:value fact, not the emoji banner or "── OS ──".
+        self.assertTrue(parsed.summary.startswith("Hostname: ubuntu-desktop"))
+        self.assertNotIn("System Information", parsed.summary)
+        self.assertNotIn("── OS ──", parsed.summary)
+
     def test_generic_parser_handles_empty_output(self):
         parsed = self.parser.parse("vpn_status", "   \n  ", {})
 
