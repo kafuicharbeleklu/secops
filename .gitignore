@@ -35,3 +35,6 @@ build/
 
 # Antigravity CLI local data
 .antigravitycli/
+
+# Claude Code copilot skills (installed locally, not part of the project source)
+.claude/skills/

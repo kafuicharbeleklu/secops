@@ -268,6 +268,12 @@ de l'**explicitation** et de la **découpe**. Ordre recommandé :
 > Principe : **0 et 1 avant tout refactor** ; ensuite, un chantier à la fois,
 > tests verts entre chaque.
 
+> **État (2026-06-29) :** chantiers 0, 1, 2, 4 **faits** (historique git en place ;
+> ruff + suite unittest ; `AutonomyPolicy` extraite **et câblée** ; briefing de
+> mission). **Restent :** 3 (`MissionLoop`), 5 (`Plan` + `/plan`), 6 (split
+> `result_parser`), 7 (découpe `renderer`). La validation humaine des leçons (§5.2)
+> est livrée via `/lessons` (`cli/lessons.py` + `ExperienceStore.review_lesson`).
+
 ### Décisions de parité TUI actées
 
 - **Glyphe des lignes outil** : toujours `●` (plein) ; l'état est encodé par la
@@ -282,7 +288,7 @@ de l'**explicitation** et de la **découpe**. Ordre recommandé :
 - **Suggestions argumentées** (`_render_suggested_actions`) : une ligne `Lesson:`
   concise par suggestion (le *pourquoi*), internals `Match:`/`Missing:` masqués.
 
-### Chantier 2 — AutonomyPolicy (en cours)
+### Chantier 2 — AutonomyPolicy (fait, dette résiduelle)
 
 `core/autonomy.py` implémente `AutonomyPolicy` (niveaux `copilot` /
 `risk_based` (défaut) / `supervised` / `sandbox`), avec :
@@ -290,11 +296,15 @@ de l'**explicitation** et de la **découpe**. Ordre recommandé :
   exploitation/destructifs sont retenus tant que l'utilisateur n'a pas approuvé
   un plan (sauf en sandbox). Câblé dans `agent._tools_schema_for_decision` ;
   résout `test_exploit_request_sends_no_function_tools_by_default`.
-- `pauses_for(risk)` — défini et testé, **pas encore câblé** dans la boucle
-  d'exécution.
+- `pauses_for(risk)` — **fait et câblé** : `allow_llm_chaining` (`agent.py` ~1536)
+  consulte `pauses_for` pour décider du chaînage multi-étapes ; les chaînes
+  recon→enum à faible risque s'enchaînent dans un tour, le high-risk met en pause.
+  Vérifié par `test_open_ended_request_chains_llm_tool_calls_multi_step`.
+- `for_environment(decision.environment_hint)` — CTF/LAB escaladent l'autonomie.
 
-**Reste à faire** : migrer le chaînage automatique
-(`allow_automatic_planner_execution`, hot path de `stream_response`) vers
-`AutonomyPolicy.pauses_for`, et adapter le niveau par requête via
-`AutonomyPolicy.for_environment(decision.environment_hint)`. Préalable à la
-boucle plan→act→observe→reflect (chantier 3).
+**Dette résiduelle (non bloquante)** : le flag historique
+`allow_automatic_planner_execution` coexiste encore avec `AutonomyPolicy` (le chaînage
+fonctionne sans ; `max_chained_actions_per_turn = 0` est le défaut **voulu** —
+l'auto-exécution du planner reste opt-in via `--autonomous`). L'absorber est un
+nettoyage facultatif. Le chantier 3 (`MissionLoop`) reste le vrai prochain pas
+structurel.

@@ -6,6 +6,13 @@
 > user: behaviour is identical across models → the bottleneck is the **harness**,
 > not the model.
 
+> **Resolution (2026-06-29):** all of P1–P6 below are now implemented and tested on
+> `feat/agent-autonomy-and-tooling`. The root-cause analysis is kept verbatim as a
+> historical record of *why*; see the **Resolution** section at the end for per-item
+> status and code/test evidence. Some statements below (e.g. RC2's
+> `max_chained_actions_per_turn = 0`) are now intended behaviour — the Resolution
+> clarifies which.
+
 ## Meta-finding
 
 The agent behaves as a **single-step, tool-starved, narration-first chatbot** —
@@ -102,3 +109,24 @@ work. The TUI is agy-faithful; the *agent* is not yet competent. P1 + P2 are the
 two changes most likely to make conversations feel like agy/Claude Code, and
 both are low-to-moderate risk. P3 depends on the loop work (chantier 3) and the
 already-started `AutonomyPolicy` (chantier 2).
+
+---
+
+## Resolution (2026-06-29)
+
+All improvement-plan items are implemented and covered by the suite on
+`feat/agent-autonomy-and-tooling`.
+
+| # | Status | Evidence |
+|---|---|---|
+| P1 | ✅ done | `agent._tools_schema_for_decision` ranks by goal then appends the safe-baseline floor (`_SAFE_BASELINE_RISK_CLASSES`); `_technical_goal` is now a ranking hint, not a hard gate. The AutonomyPolicy risk-gate still withholds exploit until approved. |
+| P2 | ✅ done | `SECOPS_SYSTEM_INSTRUCTION` (`llm.py`) is ~45 lines, action-first; the narrate-before-tool / don't-chain / Gemma "use sparingly" rules are gone. |
+| P3 | ✅ done | `allow_llm_chaining` (`agent.py` ~1536) is wired to `AutonomyPolicy.pauses_for`: low-risk recon→enum chains within one turn, high-risk pauses. Verified by `tests/test_tool_chaining.py::test_open_ended_request_chains_llm_tool_calls_multi_step`. **`max_chained_actions_per_turn = 0` is the intended default** (planner auto-exec stays opt-in via `--autonomous`), locked by `test_planner_candidates_are_not_executed_by_default`. |
+| P4 | ✅ done | `_announces_unexecuted_action` (`agent.py:304`) + the announced-action retry guardrail (`agent.py` ~1724) — a turn no longer ends having only narrated an action. |
+| P5 | ✅ done | `parse_generic_output` (`result_parser.py:1317`) leads the summary with the extracted fact; the "N line(s) of output / First line:" trailer is gone. |
+| P6 | ✅ done | `renderer.py` ~3419 filters `suggestion learning` telemetry out of suggested actions; guarded by `test_tui_polish`. |
+
+**Remaining reference-architecture gaps** (tracked in `IMPROVEMENT_PLAN_2026-06-29.md`):
+embeddings-based retrieval (3.3 — `experience.py` is token-overlap only) and the
+`result_parser` monolith split (4.1). `/lessons` (3.2 — human lesson validation,
+`cli/lessons.py` + `ExperienceStore.review_lesson`) shipped 2026-06-29.
