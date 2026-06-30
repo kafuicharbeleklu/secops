@@ -21,6 +21,7 @@ from rich.text import Text
 from secops_agent import __version__
 from secops_agent.cli.attachments import parse_attach_argument
 from secops_agent.cli.cancel import parse_cancel_argument
+from secops_agent.cli.lessons import format_lessons_for_review, parse_lessons_command
 from secops_agent.cli.permissions import (
     PERMISSIONS_RULE_USAGE,
     normalize_permission_mode,
@@ -1070,6 +1071,29 @@ async def run_chat_loop(
                             f"(user: {s['user_messages']}, agent: {s['assistant_messages']}, tool: {s['tool_messages']})  "
                             f"~{s['estimated_tokens']:,} tokens"
                         )
+                    elif canonical_cmd == "/lessons":
+                        store = getattr(agent, "experience_store", None)
+                        lessons_cmd = parse_lessons_command(arg)
+                        if store is None:
+                            renderer.render_error("No experience store configured.")
+                        elif lessons_cmd.action == "error":
+                            renderer.render_error(lessons_cmd.error)
+                        elif lessons_cmd.action == "list":
+                            renderer.render_status(format_lessons_for_review(store.load(limit=None)))
+                        else:  # review: promote a lesson (human validation, §5.2)
+                            result = store.review_lesson(
+                                lessons_cmd.lesson_id,
+                                status=lessons_cmd.status,
+                                note=lessons_cmd.note,
+                                dry_run=False,
+                            )
+                            if result.changed:
+                                msg = f"Lesson {lessons_cmd.lesson_id} marked '{lessons_cmd.status}'."
+                                if result.backup_path:
+                                    msg += f"  (backup: {result.backup_path})"
+                                renderer.render_success(msg)
+                            else:
+                                renderer.render_error(f"No lesson with id '{lessons_cmd.lesson_id}'.")
                     elif canonical_cmd == "/save":
                         save_arg = parse_save_argument(arg)
                         if save_arg.error:

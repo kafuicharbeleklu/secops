@@ -150,6 +150,7 @@ Tasks and sessions:
 /resume
 /rewind
 /export <name>
+/lessons [list|review <id> <reviewed|blocked|deprecated> [note]]
 ```
 
 Evidence review:

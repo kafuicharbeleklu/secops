@@ -43,6 +43,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("/keybindings", "Show keyboard shortcuts", "Configuration"),
     CommandSpec("/load", "Load a saved session", "Session", usage="/load <name>"),
     CommandSpec("/mcp", "Show MCP server runtime", "Extensions"),
+    CommandSpec("/lessons", "Review and validate cross-mission lessons", "Session", usage="/lessons [list | review <id> <reviewed|blocked|deprecated> [note]]"),
     CommandSpec("/model", "Switch the active model", "Configuration", usage="/model [auto|gemini|gemma|gemma-high|gemma-31b-off|gemma-31b]"),
     CommandSpec("/permissions", "Show or edit tool approval policy", "Configuration", alias="/permission", usage="/permissions [allow|ask|deny|clear] <resource>"),
     CommandSpec("/resume", "Resume a previous conversation", "Session"),
