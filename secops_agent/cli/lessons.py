@@ -83,3 +83,42 @@ def format_lessons_for_review(lessons: Iterable[Any], *, limit: int = 30) -> str
         lines.append(f"  … and {len(items) - limit} more.")
     lines.append("Promote with: /lessons review <id> <reviewed|blocked|deprecated> [note]")
     return "\n".join(lines)
+
+
+def format_end_of_mission_review(
+    lessons: Iterable[Any],
+    *,
+    session_name: str,
+    limit: int = 10,
+) -> str:
+    """End-of-mission prompt: list unreviewed lessons written during this mission.
+
+    Returns "" when there is nothing to review (so the caller skips rendering).
+    Scoped to the current mission via ``session_name`` (== ``mission.id``); an empty
+    ``session_name`` surfaces nothing, to avoid dumping the whole backlog at exit.
+    """
+    sid = str(session_name or "").strip()
+    if not sid:
+        return ""
+    pending = [
+        lesson
+        for lesson in lessons
+        if str(getattr(lesson, "review_status", "")) == "unreviewed"
+        and str(getattr(lesson, "session_name", "")) == sid
+    ]
+    if not pending:
+        return ""
+
+    count = len(pending)
+    noun = "lesson" if count == 1 else "lessons"
+    lines = [f"{count} new {noun} from this mission await your review:"]
+    for lesson in pending[:limit]:
+        lesson_id = str(getattr(lesson, "id", "") or "")
+        label = _lesson_label(lesson)
+        if len(label) > 90:
+            label = label[:87] + "…"
+        lines.append(f"  [{lesson_id}] {label}")
+    if count > limit:
+        lines.append(f"  … and {count - limit} more.")
+    lines.append("Validate with: /lessons review <id> <reviewed|blocked|deprecated> [note]")
+    return "\n".join(lines)

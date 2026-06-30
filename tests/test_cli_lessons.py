@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO))
 from secops_agent.cli.lessons import (  # noqa: E402
     LESSONS_USAGE,
     VALID_REVIEW_STATUSES,
+    format_end_of_mission_review,
     format_lessons_for_review,
     parse_lessons_command,
 )
@@ -75,6 +76,33 @@ class FormatLessonsForReviewTests(unittest.TestCase):
 
     def test_empty_store_has_a_message(self):
         self.assertTrue(format_lessons_for_review([]).strip())
+
+
+class EndOfMissionReviewTests(unittest.TestCase):
+    def test_surfaces_unreviewed_lessons_from_this_mission(self):
+        a = CaseLesson(title="nmap finds apache", outcome="success",
+                       review_status="unreviewed", session_name="m1", id="id1aaaa")
+        b = CaseLesson(title="ffuf finds /admin", outcome="success",
+                       review_status="unreviewed", session_name="m1", id="id2bbbb")
+        out = format_end_of_mission_review([a, b], session_name="m1")
+        self.assertIn("id1aaaa", out)
+        self.assertIn("id2bbbb", out)
+        self.assertIn("/lessons review", out)
+
+    def test_excludes_reviewed_and_other_missions(self):
+        reviewed = CaseLesson(title="x", outcome="success",
+                              review_status="reviewed", session_name="m1", id="rev1")
+        other = CaseLesson(title="y", outcome="success",
+                           review_status="unreviewed", session_name="m2", id="oth1")
+        self.assertEqual(format_end_of_mission_review([reviewed, other], session_name="m1"), "")
+
+    def test_empty_session_name_surfaces_nothing(self):
+        a = CaseLesson(title="z", outcome="success",
+                       review_status="unreviewed", session_name="", id="zzz1")
+        self.assertEqual(format_end_of_mission_review([a], session_name=""), "")
+
+    def test_no_pending_returns_empty(self):
+        self.assertEqual(format_end_of_mission_review([], session_name="m1"), "")
 
 
 if __name__ == "__main__":

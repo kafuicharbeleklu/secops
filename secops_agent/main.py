@@ -21,7 +21,11 @@ from rich.text import Text
 from secops_agent import __version__
 from secops_agent.cli.attachments import parse_attach_argument
 from secops_agent.cli.cancel import parse_cancel_argument
-from secops_agent.cli.lessons import format_lessons_for_review, parse_lessons_command
+from secops_agent.cli.lessons import (
+    format_end_of_mission_review,
+    format_lessons_for_review,
+    parse_lessons_command,
+)
 from secops_agent.cli.permissions import (
     PERMISSIONS_RULE_USAGE,
     normalize_permission_mode,
@@ -1015,6 +1019,17 @@ async def run_chat_loop(
                         renderer.render_user_input(stripped, trailing_blank=False, separator=False)
 
                     if canonical_cmd == "/exit":
+                        _store = getattr(agent, "experience_store", None)
+                        if _store is not None:
+                            try:
+                                _review = format_end_of_mission_review(
+                                    _store.load(limit=None),
+                                    session_name=agent._mission_session_name(),
+                                )
+                            except OSError:
+                                _review = ""
+                            if _review:
+                                renderer.render_status(_review)
                         renderer.render_status("Goodbye.")
                         break
                     elif canonical_cmd == "/help":
