@@ -1583,6 +1583,30 @@ class SecOpsAgent:
         if hasattr(self.llm, "prepare_for_prompt"):
             self.llm.prepare_for_prompt(user_input, context=llm_context or None)
 
+        async for _event in self._run_mission_loop(
+            user_input=user_input,
+            request_decision=request_decision,
+            turn_id=turn_id,
+            guided_lab_restraint_turn=guided_lab_restraint_turn,
+            allow_llm_chaining=allow_llm_chaining,
+            chained_actions_this_turn=chained_actions_this_turn,
+        ):
+            yield _event
+
+    async def _run_mission_loop(
+        self,
+        *,
+        user_input: str,
+        request_decision: Any,
+        turn_id: str,
+        guided_lab_restraint_turn: bool,
+        allow_llm_chaining: bool,
+        chained_actions_this_turn: int,
+    ) -> AsyncIterator[AgentEvent]:
+        """The ReAct mission loop (plan->act->observe->reflect), extracted from
+        stream_response (chantier 3 / ARCHITECTURE §3). Bounded by max_iterations;
+        preserves both convergence guardrails and the AutonomyPolicy pause behaviour.
+        """
         iteration = 0
         local_preflight_calls = self._local_preflight_tool_calls(user_input)
         text_only_followup_after_tools = False
