@@ -270,9 +270,11 @@ de l'**explicitation** et de la **découpe**. Ordre recommandé :
 
 > **État (2026-06-29) :** chantiers 0, 1, 2, 4 **faits** (historique git en place ;
 > ruff + suite unittest ; `AutonomyPolicy` extraite **et câblée** ; briefing de
-> mission). **Restent :** 3 (`MissionLoop`), 5 (`Plan` + `/plan`), 6 (split
-> `result_parser`), 7 (découpe `renderer`). La validation humaine des leçons (§5.2)
-> est livrée via `/lessons` (`cli/lessons.py` + `ExperienceStore.review_lesson`).
+> mission ; **6** : `result_parser` scindé en package `core/result_parsers/`
+> base+familles, façade conservée ; **3** : boucle ReAct extraite dans
+> `_run_mission_loop`, `stream_response` = délégateur fin). **Restent :** 5 (`Plan` +
+> `/plan`), 7 (découpe `renderer`). La validation humaine des leçons (§5.2) est
+> livrée via `/lessons` (`cli/lessons.py` + `ExperienceStore.review_lesson`).
 
 ### Décisions de parité TUI actées
 
@@ -306,5 +308,6 @@ de l'**explicitation** et de la **découpe**. Ordre recommandé :
 `allow_automatic_planner_execution` coexiste encore avec `AutonomyPolicy` (le chaînage
 fonctionne sans ; `max_chained_actions_per_turn = 0` est le défaut **voulu** —
 l'auto-exécution du planner reste opt-in via `--autonomous`). L'absorber est un
-nettoyage facultatif. Le chantier 3 (`MissionLoop`) reste le vrai prochain pas
-structurel.
+nettoyage facultatif. Le chantier 3 est **amorcé** : la boucle ReAct est extraite
+dans `_run_mission_loop` (`stream_response` = délégateur fin) ; reste l'option de la
+promouvoir en classe `MissionLoop` dédiée (`core/mission_loop.py`).

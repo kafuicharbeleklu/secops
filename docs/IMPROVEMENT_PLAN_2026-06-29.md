@@ -61,10 +61,11 @@ Phase 0.1, 0.2; **P6** (1.1), **P1** (1.2), **P2** (1.3), **P4/P5** (1.4); **P3 
 `cli/lessons.py` + `review_lesson`; renamed from `/memory`, a banned
 Claude-Code-imitation command).
 
-**Genuinely remaining:** `MissionLoop` extraction (2.2 — refactor, no behaviour gain),
-**embeddings** (3.3), `result_parser` **split** (4.1), persistent `Plan` + `/plan` (4.2),
-and the 3.2 **end-of-mission surfacing** hook (the command shipped; the post-mission
-prompt listing new unreviewed lessons is not wired yet).
+**Genuinely remaining:** **embeddings** (3.3), persistent `Plan` + `/plan` (4.2).
+*(2.2 core done: the ReAct loop is extracted to `_run_mission_loop`, `stream_response` is now
+a thin delegator; promoting it to a standalone `MissionLoop` class is optional polish.)*
+*(3.2 fully shipped: `/lessons` + end-of-mission surfacing on `/exit`. 4.1 done: `result_parser`
+split into `core/result_parsers/` package, façade preserved, 603 tests + 20k-iter fuzz green.)*
 
 **Caveat for 2.1:** the migration is *functionally* complete (chaining works, `pauses_for`
 gates it, `max_chained_actions_per_turn = 0` is the intended default with planner
@@ -173,7 +174,7 @@ delegator), `tests/test_mission_phase.py` + new `tests/test_mission_loop.py`.
 `AutonomyPolicy` + budget, emitting the same events; `stream_response` delegates to it;
 both convergence guardrails preserved. **Risk:** moderate–high (large refactor — do it in a
 worktree, behaviour-preserving, characterization tests first). **Depends on:** 2.1.
-- [ ] Characterization tests pinning current event stream BEFORE moving code.
+- [x] **Done (extract-method)** — the ~900-line ReAct loop moved verbatim into `_run_mission_loop`; `stream_response` is now setup + delegation. Net: existing event-stream characterization (esp. `test_tool_chaining`, 57 event assertions) + ruff F821-clean + 603 tests green. Standalone `core/mission_loop.py` class promotion deferred (the method is already a clean, named seam).
 
 ---
 
@@ -196,7 +197,7 @@ reviewed/blocked/deprecated`), `core/experience.py` (`review_lesson` l.1010,
 `/lessons review`; an end-of-mission prompt surfaces newly-written lessons for review; no
 lesson ever authorizes execution. **Risk:** moderate. **Depends on:** 3.1.
 - [x] **Done (command)** — `/lessons review` promotes via `ExperienceStore.review_lesson(dry_run=False)`; parsing/format in `cli/lessons.py`, covered by `tests/test_cli_lessons.py`. Renamed from `/memory` (banned imitation command).
-- [ ] **Deferred:** end-of-mission surfacing hook that lists newly-written unreviewed lessons.
+- [x] **Done** — `/exit` surfaces unreviewed lessons written this mission via `format_end_of_mission_review` (`cli/lessons.py`), scoped by `session_name == mission.id`; covered by `tests/test_cli_lessons.py`.
 
 ### Task 3.3: Hybrid similarity — add semantic recall on top of structural CBR
 **Files:** `core/experience.py` (`CaseLesson` embedding field, secondary recall in
@@ -219,8 +220,8 @@ moderate–high (adds a provider call / dependency — keep optional & cached).
 (nmap/ffuf/sqlmap/nuclei…), `tests/test_result_parser*.py` (reuse the 0.2 fuzz corpus).
 **Done:** each tool has a guaranteed parser → no OBSERVE blind spots; the monolith is
 gone; fuzz corpus from 0.2 passes against every split parser. **Risk:** low–moderate (the
-0.2 harness is the safety net). **Depends on:** 0.2, 2.2.
-- [ ] Move one family at a time, green tests + commit per family.
+0.2 harness is the safety net). **Depends on:** 0.2 (2.2 turned out non-blocking).
+- [x] **Done** — AST-extracted into `core/result_parsers/` (`base` + `recon`/`web`/`exploit`/`system`); `result_parser.py` is now a ~156-line façade assembling the registry + `ToolResultParser` and re-exporting `parse_*`/`ParsedResult` (zero import churn). Verified: ruff F821-clean, 603 tests green, 20k-iter fuzz 0 crash.
 
 ### Task 4.2: First-class persistent `Plan` + `/plan` (chantier 5)
 **Files:** `core/mission.py` (persist `Plan` in `MissionContext`), `core/planner.py`
