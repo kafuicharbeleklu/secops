@@ -64,20 +64,22 @@ async def nmap_scan(target: str, scan_type: str = "auto", ports: Optional[str] =
     if not _check_tool("nmap"):
         return "❌ Error: nmap is not installed. Install with: sudo apt install nmap"
 
-    # Resolve 'auto' → SYN if root available, TCP connect otherwise
+    # Resolve scan type. 'auto' is the recon default and must detect service
+    # versions — otherwise "what version of Apache is running?" can't be answered.
+    # It maps to a version scan (-sT -sV), which also needs no root. Explicit
+    # 'syn' keeps SYN semantics, falling back to TCP connect without sudo.
     resolved_type = scan_type
-    if scan_type in ("auto", "syn"):
+    if scan_type == "auto":
+        resolved_type = "version"
+    elif scan_type == "syn":
         has_sudo = await _sudo_available()
         if not has_sudo:
-            if scan_type == "syn":
-                await report_progress(
-                    "sudo not available",
-                    "falling back to TCP connect scan (-sT) — SYN scan requires root",
-                    percent=8,
-                )
-            resolved_type = "tcp" if not has_sudo else "syn"
-        else:
-            resolved_type = "syn"
+            await report_progress(
+                "sudo not available",
+                "falling back to TCP connect scan (-sT) — SYN scan requires root",
+                percent=8,
+            )
+        resolved_type = "syn" if has_sudo else "tcp"
 
     await report_progress("building scan plan", f"{resolved_type} scan for {target}", percent=10)
     cmd = _build_nmap_cmd(resolved_type, target, ports, extra_args)
