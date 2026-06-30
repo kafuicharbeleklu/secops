@@ -912,7 +912,10 @@ def parse_whois_output(raw: str, args: Dict[str, Any]) -> ParsedResult:
     org_match = re.search(r"(?im)^(?:Registrant Organization|OrgName|Organization):\s*(.+)$", clean)
     status = sorted(set(re.findall(r"(?im)^Domain Status:\s*([^\r\n]+)", clean)))
     nameservers = sorted(set(ns.strip().rstrip(".") for ns in re.findall(r"(?im)^Name Server:\s*(\S+)", clean)))
-    emails = sorted(set(re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", clean)))
+    # Anchor the local part to a left boundary ((?<![\w.+-])) so re.findall does
+    # not retry a full match at every interior position of a long run — that
+    # retry is what makes the unanchored pattern O(n^2) (ReDoS) on hostile input.
+    emails = sorted(set(re.findall(r"(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", clean)))
 
     if no_match:
         summary = f"WHOIS lookup for {target}: no registration match"
