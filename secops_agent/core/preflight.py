@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import platform
 import re
+import shutil
 import socket
 import subprocess
 import unicodedata
@@ -62,6 +63,14 @@ def prefers_french(user_input: str) -> bool:
     )
 
 
+def _format_local_stamp(dt: Any, french: bool) -> str:
+    """Human-readable date/time stamp: numeric day/month for French (avoids
+    English weekday/month names bleeding into a French sentence)."""
+    if french:
+        return dt.strftime("%d/%m/%Y à %H:%M:%S %Z")
+    return dt.strftime("%A %B %d, %Y at %I:%M:%S %p %Z")
+
+
 # ---------------------------------------------------------------------------
 # System query helpers
 # ---------------------------------------------------------------------------
@@ -102,6 +111,119 @@ def local_ip_addresses() -> list[str]:
         except OSError:
             pass
     return addresses
+
+
+# Common local CLI tools the agent may be asked about ("is nmap installed?",
+# "what tools are installed?"). Version probing is only run for tools known to
+# support a fast, non-interactive --version.
+_LOCAL_TOOL_NAMES: tuple[str, ...] = (
+    "nmap", "nikto", "sqlmap", "gobuster", "ffuf", "nuclei", "curl", "openssl",
+    "hydra", "john", "hashcat", "dig", "whois", "masscan", "wpscan",
+    "searchsploit", "nc", "ncat", "python3", "go",
+)
+_VERSION_SAFE_TOOLS: frozenset[str] = frozenset({
+    "nmap", "nikto", "sqlmap", "gobuster", "ffuf", "nuclei", "curl", "openssl",
+    "hydra", "john", "hashcat", "whois", "masscan", "searchsploit", "python3", "go",
+})
+
+
+def _tool_version_line(tool: str) -> str:
+    path = shutil.which(tool)
+    if not path:
+        return f"{tool}: not installed"
+    if tool in _VERSION_SAFE_TOOLS:
+        try:
+            proc = subprocess.run(
+                [tool, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+            lines = [
+                line.strip()
+                for line in ((proc.stdout or "") + "\n" + (proc.stderr or "")).splitlines()
+                if line.strip()
+            ]
+            if lines:
+                return f"{tool}: {lines[0]}"
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return f"{tool}: installed ({path})"
+
+
+def describe_local_tools(user_input: str) -> str:
+    """Report installed status/version of local CLI tools named in the prompt,
+    or a presence overview when the prompt asks about tools generally."""
+    text = plain_text(user_input)
+    named = [
+        tool
+        for tool in _LOCAL_TOOL_NAMES
+        if re.search(rf"\b{re.escape(tool)}\b", text)
+    ]
+    if named:
+        lines = [_tool_version_line(tool) for tool in named]
+        return "Local tool status:\n" + "\n".join(f"  {line}" for line in lines)
+
+    present = [tool for tool in _LOCAL_TOOL_NAMES if shutil.which(tool)]
+    missing = [tool for tool in _LOCAL_TOOL_NAMES if not shutil.which(tool)]
+    lines = [f"Installed: {', '.join(present) if present else 'none of the common set'}"]
+    if missing:
+        lines.append(f"Not found: {', '.join(missing)}")
+    return "Local tooling:\n" + "\n".join(f"  {line}" for line in lines)
+
+
+# Common city/zone references -> IANA timezone. Kept curated (not the full tz
+# database) for predictable matching; extend as needed.
+_CITY_TIMEZONES: dict[str, str] = {
+    "utc": "UTC",
+    "gmt": "UTC",
+    "tokyo": "Asia/Tokyo",
+    "japan": "Asia/Tokyo",
+    "new york": "America/New_York",
+    "los angeles": "America/Los_Angeles",
+    "san francisco": "America/Los_Angeles",
+    "chicago": "America/Chicago",
+    "london": "Europe/London",
+    "paris": "Europe/Paris",
+    "berlin": "Europe/Berlin",
+    "madrid": "Europe/Madrid",
+    "rome": "Europe/Rome",
+    "moscow": "Europe/Moscow",
+    "dubai": "Asia/Dubai",
+    "singapore": "Asia/Singapore",
+    "hong kong": "Asia/Hong_Kong",
+    "shanghai": "Asia/Shanghai",
+    "beijing": "Asia/Shanghai",
+    "sydney": "Australia/Sydney",
+    "delhi": "Asia/Kolkata",
+    "mumbai": "Asia/Kolkata",
+    "kolkata": "Asia/Kolkata",
+    "sao paulo": "America/Sao_Paulo",
+    "toronto": "America/Toronto",
+}
+
+
+def resolve_requested_timezone(user_input: str) -> tuple[Any, str]:
+    """Map a timezone/city named in the prompt to ``(ZoneInfo, label)``.
+
+    Returns ``(None, "")`` when no known timezone is referenced (caller then
+    answers in the local system timezone).
+    """
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    text = plain_text(user_input)
+    # Longest keys first so "new york" wins over any shorter substring match.
+    for key in sorted(_CITY_TIMEZONES, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(key)}\b", text):
+            iana = _CITY_TIMEZONES[key]
+            label = key.upper() if key in {"utc", "gmt"} else key.title()
+            try:
+                return ZoneInfo(iana), label
+            except (ZoneInfoNotFoundError, OSError):
+                return None, ""
+    return None, ""
 
 
 # ---------------------------------------------------------------------------
@@ -257,10 +379,68 @@ class PreflightRouter:
 
         import datetime
 
+        now = datetime.datetime.now().astimezone()
+
+        if any(marker in text for marker in ("unix timestamp", "unix time", "epoch time", "epoch", "current timestamp")):
+            epoch = int(now.timestamp())
+            stamp = _format_local_stamp(now, french)
+            return (
+                f"Timestamp Unix actuel : {epoch} ({stamp})."
+                if french
+                else f"Current Unix timestamp: {epoch} ({stamp})."
+            )
+
+        time_or_date_markers = (
+            "what time",
+            "quelle heure",
+            "il est quelle heure",
+            "system time",
+            "time in",
+            "today's date",
+            "todays date",
+            "date today",
+            "current date",
+            "date and time",
+            "what date",
+            "quelle date",
+            "la date",
+            "date du jour",
+            "aujourd'hui",
+        )
+        zone, zone_label = resolve_requested_timezone(user_input)
+        if zone is not None and any(marker in text for marker in time_or_date_markers):
+            stamp = _format_local_stamp(datetime.datetime.now(zone), french)
+            return (
+                f"Il est actuellement {stamp} ({zone_label})."
+                if french
+                else f"The current time in {zone_label} is {stamp}."
+            )
+
+        date_markers = (
+            "today's date",
+            "todays date",
+            "date today",
+            "current date",
+            "date and time",
+            "what date",
+            "quelle date",
+            "la date",
+            "date du jour",
+            "aujourd'hui",
+        )
+        if any(marker in text for marker in date_markers):
+            stamp = _format_local_stamp(now, french)
+            return (
+                f"Nous sommes le {stamp}."
+                if french
+                else f"The current system date and time is {stamp}."
+            )
+
         if any(marker in text for marker in ("what time", "quelle heure", "il est quelle heure", "system time")):
-            now = datetime.datetime.now().astimezone()
+            if french:
+                return f"Il est actuellement {_format_local_stamp(now, True)}."
             stamp = now.strftime("%a %b %d %I:%M:%S %p %Z %Y")
-            return f"Il est actuellement {stamp}." if french else f"The current system time is {stamp}."
+            return f"The current system time is {stamp}."
 
         if any(
             marker in text
@@ -268,6 +448,8 @@ class PreflightRouter:
                 "os version",
                 "version os",
                 "operating system",
+                "what os",
+                "which os",
                 "systeme d'exploitation",
                 "système d'exploitation",
                 "kernel",
@@ -286,6 +468,7 @@ class PreflightRouter:
             for marker in (
                 "my ip",
                 "my ip address",
+                "local ip",
                 "mon ip",
                 "mon adresse ip",
                 "mes adresses ip",
@@ -311,6 +494,18 @@ class PreflightRouter:
         if "hostname" in text:
             hostname = socket.gethostname()
             return f"Le nom d'hôte est {hostname}." if french else f"The hostname is {hostname}."
+
+        if any(
+            marker in text
+            for marker in (
+                "is installed",
+                "tools installed",
+                "tools are installed",
+                "which tools",
+                "what tools",
+            )
+        ):
+            return describe_local_tools(user_input)
 
         return ""
 
@@ -546,7 +741,19 @@ class PreflightRouter:
         text = plain_text(user_input)
         explicit_tool = any(token in text for token in ("gobuster", "go buster", "dirb", "ffuf"))
         directory_intent = (
-            any(token in text for token in ("find directories", "find directory", "hidden directory"))
+            any(
+                token in text
+                for token in (
+                    "find directories",
+                    "find directory",
+                    "hidden directory",
+                    "hidden directories",
+                    "enumerate directories",
+                    "list directories",
+                    "directory brute",
+                    "brute force directories",
+                )
+            )
             or ("director" in text and "web" in text)
             or ("repertoire" in text and "web" in text)
         )
