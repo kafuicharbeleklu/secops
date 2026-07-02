@@ -1611,6 +1611,10 @@ class SecOpsAgent:
         local_preflight_calls = self._local_preflight_tool_calls(user_input)
         text_only_followup_after_tools = False
         announced_action_retry_used = False
+        # A5: best available summary of a tool result obtained this turn, used as
+        # a fallback answer if the follow-up synthesis LLM call fails transiently
+        # so the turn is never left empty and the result is not discarded.
+        pending_tool_summary = ""
         previous_iter_signatures: tuple[str, ...] = ()
         repeated_iteration_streak = 0
         while iteration < self.max_iterations:
@@ -1659,6 +1663,14 @@ class SecOpsAgent:
                         yield llm_item
                         continue
                     if isinstance(llm_item, ErrorEvent):
+                        # A5: a transient failure of the synthesis call must not
+                        # discard a tool result already obtained this turn.
+                        # Present the extracted summary so the turn is not empty
+                        # and the correct data still reaches the user.
+                        if pending_tool_summary and not current_response_text.strip():
+                            yield TextEvent(content=pending_tool_summary)
+                            self.memory.add_assistant_message(pending_tool_summary)
+                            pending_tool_summary = ""
                         yield llm_item
                         return
                     chunk = llm_item
@@ -2401,6 +2413,15 @@ class SecOpsAgent:
                 parsed_summary = str(getattr(parsed_result, "summary", "") or "").strip()
                 if parsed_summary and isinstance(getattr(res, "metadata", None), dict):
                     res.metadata.setdefault("parsed_summary", parsed_summary)
+                # A5: remember the best user-facing summary of this successful tool
+                # result so it can be presented if the synthesis call later fails.
+                if res.success:
+                    tool_answer = (
+                        self._format_tool_answer_summary(tc.name, tc.arguments, parsed_result)
+                        or parsed_summary
+                    )
+                    if tool_answer:
+                        pending_tool_summary = tool_answer
                 yield ToolResultEvent(name=tc.name, result=res, id=tc.id)
                 if local_preflight_turn and res.success:
                     answer_summary = self._format_tool_answer_summary(
