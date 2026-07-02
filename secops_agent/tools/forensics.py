@@ -541,7 +541,7 @@ async def run_shell(command: str, timeout: int = 300, inactivity_timeout: int = 
     description="Gather system information including OS, kernel, network interfaces, running services, and user accounts.",
     category=ToolCategory.SYSTEM,
     parameters={
-        "category": {"type": "string", "description": "Info category: 'all', 'os', 'network', 'users', 'processes', 'services'", "required": False, "default": "all"},
+        "category": {"type": "string", "description": "Info category: 'all', 'os', 'resources', 'network', 'users', 'processes', 'services'", "required": False, "default": "all"},
     },
     dangerous=False,
 )
@@ -560,6 +560,13 @@ async def sysinfo(category: str = "all") -> str:
         result += f"  Kernel: {await get_cmd('uname -r')}\n"
         result += f"  Arch: {await get_cmd('uname -m')}\n"
         result += f"  Uptime: {await get_cmd('uptime -p 2>/dev/null || uptime')}\n\n"
+
+    if category in ("all", "resources"):
+        result += "── Resources ──\n"
+        result += f"  CPU cores: {await get_cmd('nproc 2>/dev/null')}\n"
+        result += f"  CPU model: {await get_cmd('grep -m1 \"model name\" /proc/cpuinfo | cut -d: -f2- | sed \"s/^ //\" || lscpu 2>/dev/null | grep \"Model name\"')}\n"
+        result += f"  Memory: {await get_cmd('free -h 2>/dev/null | grep -i \"^Mem:\" || free -h 2>/dev/null')}\n"
+        result += f"  Disk (/): {await get_cmd('df -h / 2>/dev/null | tail -1')}\n\n"
 
     if category in ("all", "network"):
         result += "── Network ──\n"
