@@ -35,6 +35,30 @@ class LocalSystemPhrasingTests(unittest.TestCase):
                 self.assertTrue(answer)
                 self.assertIn("kernel", answer.lower())
 
+    def test_french_tools_installed_phrasings_classify_local(self) -> None:
+        """D1b / D9: the French phrasings for "which tools are installed" must
+        classify as LOCAL_SYSTEM (they fell through to UNKNOWN → the LLM →
+        wrong tool)."""
+        for prompt in (
+            "quels outils offensifs sont installés ?",
+            "quels outils sont installés ?",
+            "quel outil est installé ?",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(
+                    classify_request(prompt).technical_goal, TechnicalGoal.LOCAL_SYSTEM
+                )
+
+    def test_french_tools_answer_is_french_and_lists_tools(self) -> None:
+        answer = self._answer("quels outils offensifs sont installés ?")
+        self.assertTrue(answer, "no deterministic answer for the French tools query")
+        # French output, not the English "Local tooling / Installed / Not found".
+        self.assertIn("install", answer.lower())
+        self.assertNotIn("Local tooling", answer)
+        self.assertNotIn("Not found", answer)
+        # nmap is present on this host's common set; the overview must name it.
+        self.assertIn("nmap", answer)
+
 
 if __name__ == "__main__":
     unittest.main()

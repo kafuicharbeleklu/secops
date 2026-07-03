@@ -34,8 +34,10 @@ class ToolThenSynthesisErrorLLM:
 
     model_name = "fake-model"
 
-    def __init__(self) -> None:
+    def __init__(self, tool_name: str = "nmap_scan", arguments=None) -> None:
         self.calls = 0
+        self._tool_name = tool_name
+        self._arguments = arguments if arguments is not None else {"target": "127.0.0.1"}
 
     def prepare_for_prompt(self, prompt: str, **kwargs) -> None:
         return None
@@ -45,8 +47,8 @@ class ToolThenSynthesisErrorLLM:
         if self.calls == 1:
             yield StreamChunk(
                 tool_call=ToolCallChunk(
-                    name="nmap_scan",
-                    arguments={"target": "127.0.0.1"},
+                    name=self._tool_name,
+                    arguments=self._arguments,
                     id="call_1",
                 )
             )
@@ -97,6 +99,58 @@ class SynthesisErrorFallbackTests(unittest.IsolatedAsyncioTestCase):
         # A5: the correct tool result is presented instead of an empty turn
         self.assertIn("Ports ouverts", full_text)
         self.assertIn("631/tcp", full_text)
+
+    async def test_generic_tool_fallback_has_no_collapse_trailer(self) -> None:
+        """RC-α / D5-leak: when synthesis fails, the A5 fallback for a tool
+        without a bespoke formatter must present a clean fact, never the
+        parser's internal '(+N more line(s))' collapse trailer."""
+        registry = ToolRegistry()
+
+        long_output = "\n".join(
+            [
+                "Hostname: audit-box",
+                "OS: Ubuntu 24.04",
+                "Kernel: 6.8.0",
+                "CPU: 8 cores",
+                "Memory: 32 GiB",
+                "Disk: 512 GiB",
+                "Uptime: 3h 20m",
+            ]
+        )
+
+        async def fake_sysinfo(**_):
+            return long_output
+
+        registry.register(
+            name="sysinfo",
+            description="System info",
+            category=ToolCategory.SYSTEM,
+            parameters={},
+            func=fake_sysinfo,
+            dangerous=False,
+        )
+        permissions = PermissionEngine()
+        permissions.remember(
+            PermissionResource(kind="tool", name="sysinfo"),
+            PermissionDecision.ALLOW,
+        )
+        agent = SecOpsAgent(
+            llm=ToolThenSynthesisErrorLLM(tool_name="sysinfo", arguments={}),
+            registry=registry,
+            memory=ConversationMemory(),
+            permissions=permissions,
+            result_parser=ToolResultParser(),
+            max_iterations=3,
+        )
+
+        events = []
+        async for event in agent.stream_response("donne-moi les infos système"):
+            events.append(event)
+
+        full_text = "".join(e.content for e in events if isinstance(e, TextEvent))
+        self.assertTrue(full_text.strip(), "A5 fallback must not end empty")
+        self.assertNotIn("(+", full_text)
+        self.assertNotIn("more line(s)", full_text)
 
 
 if __name__ == "__main__":

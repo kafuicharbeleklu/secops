@@ -155,8 +155,13 @@ def _tool_version_line(tool: str) -> str:
 
 def describe_local_tools(user_input: str) -> str:
     """Report installed status/version of local CLI tools named in the prompt,
-    or a presence overview when the prompt asks about tools generally."""
+    or a presence overview when the prompt asks about tools generally.
+
+    French-first: a French prompt gets a French answer (D1b / RC-β), matching
+    the "Outils installés : … ; manquants : …" phrasing used elsewhere.
+    """
     text = plain_text(user_input)
+    french = prefers_french(user_input)
     named = [
         tool
         for tool in _LOCAL_TOOL_NAMES
@@ -164,10 +169,17 @@ def describe_local_tools(user_input: str) -> str:
     ]
     if named:
         lines = [_tool_version_line(tool) for tool in named]
-        return "Local tool status:\n" + "\n".join(f"  {line}" for line in lines)
+        header = "État des outils locaux :" if french else "Local tool status:"
+        return header + "\n" + "\n".join(f"  {line}" for line in lines)
 
     present = [tool for tool in _LOCAL_TOOL_NAMES if shutil.which(tool)]
     missing = [tool for tool in _LOCAL_TOOL_NAMES if not shutil.which(tool)]
+    if french:
+        installed = ", ".join(present) if present else "aucun de l'ensemble courant"
+        parts = [f"Outils installés : {installed}"]
+        if missing:
+            parts.append(f"manquants : {', '.join(missing)}")
+        return " ; ".join(parts) + "."
     lines = [f"Installed: {', '.join(present) if present else 'none of the common set'}"]
     if missing:
         lines.append(f"Not found: {', '.join(missing)}")
@@ -544,6 +556,10 @@ class PreflightRouter:
                 "tools are installed",
                 "which tools",
                 "what tools",
+                "outils installes",
+                "sont installes",
+                "est installe",
+                "outils offensifs",
             )
         ):
             return describe_local_tools(user_input)

@@ -406,6 +406,11 @@ def _technical_goal(text: str) -> TechnicalGoal:
             "tools are installed",
             "which tools",
             "what tools",
+            # French (accent-stripped by _plain): "quels outils … sont installés"
+            "outils installes",
+            "sont installes",
+            "est installe",
+            "outils offensifs",
         ),
     ):
         return TechnicalGoal.LOCAL_SYSTEM

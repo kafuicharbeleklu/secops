@@ -195,8 +195,11 @@ class LocalLabSetupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executed, [{}])
         rendered_text = "".join(event.content for event in events if isinstance(event, TextEvent))
         self.assertNotIn("Je vais traiter cette demande", rendered_text)
-        # The answer leads with the actual status, not a "N line(s)" meta count.
-        self.assertIn("VPN status: down/stale", rendered_text)
+        # RC-α: the answer is a clean French sentence about the status — never the
+        # raw "VPN status:" line, a "N line(s)" meta count, or the parser's
+        # "(+N more line(s))" collapse trailer.
+        self.assertIn("aucun VPN actif", rendered_text)
+        self.assertNotIn("(+", rendered_text)
         self.assertNotIn("line(s) of output", rendered_text)
 
     async def test_vpn_disconnect_prompt_uses_disconnect_tool_without_llm(self):

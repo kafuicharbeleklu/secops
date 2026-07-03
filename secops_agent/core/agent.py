@@ -203,6 +203,16 @@ AgentEvent = Union[
 # questions and greetings never reach here (they suppress follow-ups).
 _CHAINING_INTENTS = frozenset({UserIntent.UNKNOWN, UserIntent.APPROVED_BATCH})
 
+# RC-α: the generic parser collapses long output to "<lead>  (+N more line(s))"
+# (core/result_parsers/system.py). That trailer is a display hint for the Ctrl+O
+# collapsed view — it must never surface in the user-facing answer channel.
+_COLLAPSE_TRAILER_RE = re.compile(r"\s*\(\+\d+\s+more line\(s\)\)\s*$")
+
+
+def _strip_collapse_trailer(text: Any) -> str:
+    """Drop the parser's collapsed-preview trailer from an answer string."""
+    return _COLLAPSE_TRAILER_RE.sub("", str(text or "")).strip()
+
 
 # ── Agent ─────────────────────────────────────────────────────────────
 
@@ -997,6 +1007,54 @@ class SecOpsAgent:
         if parsed_result is None:
             return ""
 
+        if tool_name == "vpn_status":
+            raw = str(getattr(parsed_result, "raw_output", "") or "")
+            status = ""
+            for line in raw.splitlines():
+                stripped = line.strip()
+                if stripped.lower().startswith("vpn status:"):
+                    status = stripped.split(":", 1)[1].strip().lower()
+                    break
+            detail = {
+                "connected": "tunnel TUN actif et utilisable",
+                "down/stale": "interface TUN présente mais DOWN/NO-CARRIER, "
+                "un processus OpenVPN subsiste",
+                "disconnected": "aucune interface tun active ni processus OpenVPN",
+                "starting/stale": "OpenVPN démarre, pas encore d'interface TUN active",
+            }.get(status)
+            if status == "connected":
+                head = "Oui, un VPN est actif"
+            elif status:
+                head = "Non, aucun VPN actif"
+            else:
+                return _strip_collapse_trailer(getattr(parsed_result, "summary", ""))
+            return f"{head} ({detail})." if detail else f"{head}."
+
+        if tool_name == "lab_setup_check":
+            raw = str(getattr(parsed_result, "raw_output", "") or "")
+            present: list[str] = []
+            missing: list[str] = []
+            in_tools = False
+            for line in raw.splitlines():
+                if line.strip() == "Tools:":
+                    in_tools = True
+                    continue
+                if not in_tools:
+                    continue
+                if not line.startswith("  "):  # blank line / next section ends the block
+                    break
+                name, sep, state = line.strip().partition(":")
+                if not sep or name.strip() == "sudo":
+                    continue
+                bucket = missing if state.strip() == "not installed" else present
+                bucket.append(name.strip())
+            if present or missing:
+                parts = ["Outils installés : " + (", ".join(present) or "aucun")]
+                if missing:
+                    parts.append("manquants : " + ", ".join(missing))
+                return " ; ".join(parts) + "."
+            return _strip_collapse_trailer(getattr(parsed_result, "summary", ""))
+
         if tool_name == "nmap_scan":
             services = [
                 service
@@ -1004,8 +1062,7 @@ class SecOpsAgent:
                 if str(getattr(service, "state", "") or "").casefold() == "open"
             ]
             if not services:
-                summary = str(getattr(parsed_result, "summary", "") or "").strip()
-                return summary
+                return _strip_collapse_trailer(getattr(parsed_result, "summary", ""))
 
             target = str(arguments.get("target") or "").strip() or "target"
             ports = ", ".join(f"{svc.port}/{svc.protocol}" for svc in services)
@@ -1057,7 +1114,7 @@ class SecOpsAgent:
             url = str(arguments.get("url") or arguments.get("target") or "").strip() or "target"
             lines = [f"Résultat GoBuster pour `{url}`:"]
             if not paths:
-                summary = str(getattr(parsed_result, "summary", "") or "").strip()
+                summary = _strip_collapse_trailer(getattr(parsed_result, "summary", ""))
                 if summary:
                     lines.append(summary)
                 lines.append("Aucun chemin exploitable n'a été identifié dans ce passage.")
@@ -1106,7 +1163,7 @@ class SecOpsAgent:
                 lines.append("Question restante: identifier le formulaire d'upload puis récupérer `user.txt`.")
             return "\n".join(lines)
 
-        return str(getattr(parsed_result, "summary", "") or "").strip()
+        return _strip_collapse_trailer(getattr(parsed_result, "summary", ""))
 
     def _normalize_tool_arguments(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(arguments or {})
@@ -2418,7 +2475,7 @@ class SecOpsAgent:
                 if res.success:
                     tool_answer = (
                         self._format_tool_answer_summary(tc.name, tc.arguments, parsed_result)
-                        or parsed_summary
+                        or _strip_collapse_trailer(parsed_summary)
                     )
                     if tool_answer:
                         pending_tool_summary = tool_answer
