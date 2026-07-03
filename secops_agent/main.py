@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import asyncio
+from collections import deque
 import signal
 import platform
 from datetime import datetime, timezone
@@ -790,12 +791,18 @@ async def _run_side_question(task: RuntimeTask, side_agent: SecOpsAgent, query: 
         task.append_log(f"failed: {exc}")
 
 
+def _render_queued_input_notice(renderer: Renderer, remaining: int) -> None:
+    """Signal that an instruction typed during the previous turn is now running."""
+    suffix = f" · {remaining} en file" if remaining else ""
+    renderer.render_status(f"⏳ Instruction mise en file traitée{suffix}")
+
+
 async def _render_interactive_turn(
     agent: SecOpsAgent,
     renderer: Renderer,
     runtime: RuntimeState,
     user_input: str,
-) -> None:
+) -> list[str]:
     input_lines = len(str(user_input).splitlines() or [""])
     runtime.advance_ctrl_o_anchor_lines(1 + input_lines)
     renderer.render_user_input(user_input, trailing_blank=False)
@@ -807,7 +814,9 @@ async def _render_interactive_turn(
     )
     runtime.agent_state = "thinking"
     try:
-        await renderer.render_agent_stream(
+        # Returns any instructions the user typed while the agent was streaming
+        # (R1 / Example E), so the loop can process them instead of dropping them.
+        queued = await renderer.render_agent_stream(
             event_stream,
             status_right=friendly_model_name(agent.llm.model_name),
             memory=agent.memory,
@@ -815,6 +824,7 @@ async def _render_interactive_turn(
         )
     finally:
         runtime.agent_state = "idle"
+    return list(queued or [])
 
 
 async def _run_print_prompt(
@@ -961,23 +971,34 @@ async def run_chat_loop(
         renderer.render_session_transcript(agent.memory)
 
     clean_initial_prompt = initial_prompt.strip()
+    # Instructions typed while the agent is streaming are captured and processed
+    # sequentially here instead of being dropped (R1 / Example E / gap G3).
+    pending_inputs: deque[str] = deque()
     if clean_initial_prompt:
-        await _render_interactive_turn(agent, renderer, runtime, clean_initial_prompt)
+        pending_inputs.extend(
+            await _render_interactive_turn(agent, renderer, runtime, clean_initial_prompt)
+        )
 
     try:
         while True:
             try:
-                stats = agent.memory.get_stats()
-                input_handler.update_context(
-                    model_name=agent.llm.model_name,
-                    turn_count=agent.turn_count,
-                    memory=agent.memory,
-                    console=renderer.console,
-                    runtime=runtime,
-                    statusline=_statusline_payload(agent, runtime),
-                )
+                if pending_inputs:
+                    # Process an instruction the user typed during the last turn
+                    # before blocking on a fresh prompt.
+                    user_input = pending_inputs.popleft()
+                    _render_queued_input_notice(renderer, len(pending_inputs))
+                else:
+                    stats = agent.memory.get_stats()
+                    input_handler.update_context(
+                        model_name=agent.llm.model_name,
+                        turn_count=agent.turn_count,
+                        memory=agent.memory,
+                        console=renderer.console,
+                        runtime=runtime,
+                        statusline=_statusline_payload(agent, runtime),
+                    )
 
-                user_input = await input_handler.get_input(model_name=agent.llm.model_name)
+                    user_input = await input_handler.get_input(model_name=agent.llm.model_name)
 
                 if user_input is None:
                     continue
@@ -1533,7 +1554,9 @@ async def run_chat_loop(
                     continue
     
                 # ── Agent interaction ─────────────────────────────────
-                await _render_interactive_turn(agent, renderer, runtime, stripped)
+                pending_inputs.extend(
+                    await _render_interactive_turn(agent, renderer, runtime, stripped)
+                )
     
             except KeyboardInterrupt:
                 runtime.agent_state = "idle"

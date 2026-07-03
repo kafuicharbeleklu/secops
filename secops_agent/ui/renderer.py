@@ -582,6 +582,41 @@ def _compact_agent_error(message: str) -> str:
     return compact or "The model request failed."
 
 
+def _classify_stream_key_chunk(data: bytes) -> str:
+    """Classify a raw stdin chunk read while the agent streams.
+
+    Returns 'expand' (Ctrl-O), 'interrupt' (Esc / Ctrl-C), or 'text' (anything
+    else — typed-ahead input for the next turn). Ctrl-O / interrupt keep their
+    existing precedence over plain text.
+    """
+    if b"\x0f" in data:
+        return "expand"
+    if b"\x1b" in data or b"\x03" in data:
+        return "interrupt"
+    return "text"
+
+
+def _parse_typeahead_lines(raw: bytes) -> list[str]:
+    """Turn captured typed-ahead bytes into complete, submittable instructions.
+
+    Input arrives in cbreak mode, so Enter is CR. Split on CR/LF, drop empties
+    and any fragment still carrying control/escape bytes (stray arrow keys etc.).
+    A trailing fragment with no terminator is held back (not returned).
+    """
+    if not raw:
+        return []
+    text = raw.decode("utf-8", "ignore")
+    lines: list[str] = []
+    for chunk in re.split(r"[\r\n]+", text):
+        stripped = chunk.strip()
+        if not stripped:
+            continue
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in stripped):
+            continue
+        lines.append(stripped)
+    return lines
+
+
 class _EscInterruptMonitor:
     """Small raw-key watcher used only while the agent is generating."""
 
@@ -591,6 +626,27 @@ class _EscInterruptMonitor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # R1 / Example E: instructions typed while the agent streams are captured
+        # here (instead of being discarded) so the loop can queue them.
+        self._typed = bytearray()
+        self._buffer_lock = threading.Lock()
+
+    def _capture(self, data: bytes) -> None:
+        with self._buffer_lock:
+            self._typed.extend(data)
+
+    def drain_typeahead(self) -> list[str]:
+        """Return complete typed-ahead instructions captured during the turn,
+        holding back any trailing unterminated fragment for the next drain."""
+        with self._buffer_lock:
+            raw = bytes(self._typed)
+            idx = max(raw.rfind(b"\r"), raw.rfind(b"\n"))
+            if idx == -1:
+                terminated, tail = b"", raw  # nothing submitted yet
+            else:
+                terminated, tail = raw[: idx + 1], raw[idx + 1:]
+            self._typed = bytearray(tail)
+            return _parse_typeahead_lines(terminated)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -638,12 +694,16 @@ class _EscInterruptMonitor:
                 data = os.read(fd, 32)
                 if not data:
                     return
-                if b"\x0f" in data:
+                action = _classify_stream_key_chunk(data)
+                if action == "expand":
                     self._trigger_expand()
                     continue
-                if b"\x1b" in data or b"\x03" in data:
+                if action == "interrupt":
                     self._trigger()
                     return
+                # Any other bytes are instructions typed while the agent works —
+                # capture them for the loop to queue instead of discarding (G3).
+                self._capture(data)
         except Exception:
             return
         finally:
@@ -3911,3 +3971,5 @@ class Renderer:
             self.render_agent_error(f"Stream error: {str(e)}")
         finally:
             await interrupt.stop()
+        # Instructions typed while the agent was streaming, for the loop to queue.
+        return interrupt.drain_typeahead()
