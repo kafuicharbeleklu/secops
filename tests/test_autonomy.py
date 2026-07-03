@@ -69,5 +69,28 @@ class AutonomyPolicyEnvironmentTests(unittest.TestCase):
             self.assertEqual(AutonomyPolicy.for_environment(hint).level, AutonomyLevel.RISK_BASED)
 
 
+class AutonomyPostureLabelTests(unittest.TestCase):
+    """G4 / P1-4: the active posture must be surfaceable as a short human label.
+    This is display-only and must not alter the gating behaviour."""
+
+    def test_each_level_has_a_human_label(self):
+        labels = {
+            AutonomyLevel.COPILOT: "copilote",
+            AutonomyLevel.RISK_BASED: "semi-auto",
+            AutonomyLevel.SUPERVISED: "supervisé",
+            AutonomyLevel.SANDBOX: "sandbox",
+        }
+        for level, expected in labels.items():
+            with self.subTest(level=level):
+                self.assertEqual(AutonomyPolicy(level=level).label, expected)
+
+    def test_label_does_not_change_gating(self):
+        # Reading the label must not weaken the safety gate (invariant).
+        policy = AutonomyPolicy()  # RISK_BASED
+        _ = policy.label
+        self.assertFalse(policy.exposes_tool_schemas(_decision(RequestRisk.EXPLOIT)))
+        self.assertTrue(policy.pauses_for(RequestRisk.DESTRUCTIVE))
+
+
 if __name__ == "__main__":
     unittest.main()

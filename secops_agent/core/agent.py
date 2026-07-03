@@ -600,6 +600,18 @@ class SecOpsAgent:
             else None
         )
 
+    def autonomy_posture(self) -> str:
+        """Human label of the configured autonomy posture (G4, display only)."""
+        return self.autonomy.label
+
+    def current_phase(self) -> str:
+        """Current mission phase name, or '' when no mission is active (G4)."""
+        mission = self._mission()
+        if mission is None:
+            return ""
+        phase = getattr(mission, "phase", None)
+        return phase.value if hasattr(phase, "value") else str(phase or "")
+
     def _start_action_trace(
         self,
         *,

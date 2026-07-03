@@ -1053,6 +1053,8 @@ class InputHandler:
             "profile": "standard",
             "sandbox": False,
             "permissions": "default",
+            "autonomy": "semi-auto",
+            "phase": "",
             "state": "idle",
         }
 
@@ -1089,28 +1091,36 @@ class InputHandler:
         state = str(self._statusline.get("state") or "idle")
         sandbox = "sandbox" if self._statusline.get("sandbox") else "no sandbox"
         permissions = str(self._statusline.get("permissions") or "default")
+        autonomy = str(self._statusline.get("autonomy") or "")
+        phase = str(self._statusline.get("phase") or "")
+        posture_seg = f"auto:{autonomy}" if autonomy else ""
+        phase_seg = f"phase:{phase}" if phase else ""
 
         if completion_mode or width < 60:
             segments = [friendly, state, f"{tasks} tasks"]
         elif width < 90:
-            segments = [friendly, state, sandbox, permissions, f"{tasks} tasks"]
+            segments = [friendly, state, sandbox, permissions, posture_seg, f"{tasks} tasks"]
         elif width < 120:
-            segments = [friendly, state, sandbox, permissions, f"~{tokens:,} tok", f"{tasks} tasks"]
+            segments = [
+                friendly, state, sandbox, permissions, posture_seg, f"~{tokens:,} tok", f"{tasks} tasks"
+            ]
         else:
             segments = [
                 friendly,
                 state,
+                phase_seg,
                 cwd,
                 profile,
                 sandbox,
                 permissions,
+                posture_seg,
                 f"~{tokens:,} tok",
                 f"{tasks} tasks",
                 f"{dirs_count} dirs",
                 f"{tools} tools",
             ]
 
-        return _fit_segments(segments, width)
+        return _fit_segments([seg for seg in segments if seg], width)
 
     def _footer_model(self, width: int) -> str:
         return _fit_text(friendly_model_name(self._model_name or "gemini-2.5-flash"), width)

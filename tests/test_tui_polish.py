@@ -588,6 +588,20 @@ class TUIPolishTests(unittest.TestCase):
         self.assertEqual(COMPLETION_MENU_RESERVED_ROWS, 0)
         self.assertEqual(handler.session.reserve_space_for_menu, 0)
 
+    def test_statusline_surfaces_autonomy_posture_and_phase(self):
+        # G4 / P1-4: at a wide terminal, the statusline shows the active autonomy
+        # posture and the current mission phase.
+        handler = InputHandler.__new__(InputHandler)
+        handler._model_name = DEFAULT_MODEL
+        handler._statusline = {
+            "state": "idle",
+            "autonomy": "supervisé",
+            "phase": "reconnaissance",
+        }
+        line = handler._build_statusline(width=200)
+        self.assertIn("supervisé", line)
+        self.assertIn("reconnaissance", line)
+
     def test_default_footer_is_minimal_antigravity_shape(self):
         handler = InputHandler.__new__(InputHandler)
         handler.session = SimpleNamespace(

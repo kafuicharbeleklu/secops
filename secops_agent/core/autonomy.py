@@ -71,3 +71,17 @@ class AutonomyPolicy:
         if self.level == AutonomyLevel.SUPERVISED:
             return risk == RequestRisk.DESTRUCTIVE
         return risk in _HIGH_RISK  # RISK_BASED (default)
+
+    @property
+    def label(self) -> str:
+        """Short human-readable posture label for the statusline (G4).
+
+        Display only — surfacing the posture must never change what
+        exposes_tool_schemas()/pauses_for() decide.
+        """
+        return {
+            AutonomyLevel.COPILOT: "copilote",
+            AutonomyLevel.RISK_BASED: "semi-auto",
+            AutonomyLevel.SUPERVISED: "supervisé",
+            AutonomyLevel.SANDBOX: "sandbox",
+        }.get(self.level, self.level.value)

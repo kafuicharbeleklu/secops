@@ -438,6 +438,8 @@ def _statusline_payload(agent: SecOpsAgent, runtime: RuntimeState) -> dict[str, 
         "profile": "fast" if runtime.fast_mode else "standard",
         "sandbox": runtime.sandbox_enabled,
         "permissions": _permission_label(agent, runtime),
+        "autonomy": agent.autonomy_posture(),
+        "phase": agent.current_phase(),
         "state": runtime.agent_state,
     }
 
