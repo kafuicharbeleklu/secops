@@ -73,6 +73,33 @@ class TimezoneAnswerTests(unittest.TestCase):
         self.assertIsNone(zone_none)
         self.assertEqual(label_none, "")
 
+    def test_resolve_country_names_french_and_english(self) -> None:
+        """D2/RC-β: the resolver is French-first, so countries named in either
+        language (and French city spellings) must map to the right IANA zone —
+        not fall through to the host timezone."""
+        from secops_agent.core.preflight import resolve_requested_timezone
+
+        cases = [
+            ("quelle heure est-il en France ?", "Europe/Paris", "France"),
+            ("what time is it in France?", "Europe/Paris", "France"),
+            ("quelle heure est-il au Japon ?", "Asia/Tokyo", "Japon"),
+            ("quelle heure au Royaume-Uni ?", "Europe/London", "Royaume-Uni"),
+            ("il est quelle heure à Londres ?", "Europe/London", "Londres"),
+        ]
+        for prompt, iana, label_expected in cases:
+            with self.subTest(prompt=prompt):
+                zone, label = resolve_requested_timezone(prompt)
+                self.assertIsNotNone(zone, f"no zone resolved for {prompt!r}")
+                self.assertEqual(str(zone), iana)
+                self.assertEqual(label, label_expected)
+
+    def test_france_time_answer_renders_paris_zone(self) -> None:
+        answer = self._answer("quelle heure est-il en France ?")
+        self.assertIn("France", answer)
+        # %Z for Europe/Paris renders CET/CEST (season-dependent); its presence
+        # proves the stamp was rendered in Europe/Paris, not the host zone.
+        self.assertTrue("CET" in answer or "CEST" in answer, answer)
+
     def test_tokyo_time_uses_tokyo_zone(self) -> None:
         answer = self._answer("what time is it in Tokyo?")
         self.assertIn("Tokyo", answer)

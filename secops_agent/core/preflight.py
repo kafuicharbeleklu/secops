@@ -174,35 +174,76 @@ def describe_local_tools(user_input: str) -> str:
     return "Local tooling:\n" + "\n".join(f"  {line}" for line in lines)
 
 
-# Common city/zone references -> IANA timezone. Kept curated (not the full tz
-# database) for predictable matching; extend as needed.
+# Common city/country/zone references -> IANA timezone. Kept curated (not the
+# full tz database) for predictable matching; extend as needed. The agent is
+# French-first, so French names and spellings sit alongside the English ones
+# (RC-β / D2). Countries with several zones map to their conventional/capital
+# zone, which is what "what time is it in <country>" wants.
 _CITY_TIMEZONES: dict[str, str] = {
+    # Zone acronyms
     "utc": "UTC",
     "gmt": "UTC",
+    # Cities (English + French spellings)
     "tokyo": "Asia/Tokyo",
-    "japan": "Asia/Tokyo",
     "new york": "America/New_York",
     "los angeles": "America/Los_Angeles",
     "san francisco": "America/Los_Angeles",
     "chicago": "America/Chicago",
     "london": "Europe/London",
+    "londres": "Europe/London",
     "paris": "Europe/Paris",
     "berlin": "Europe/Berlin",
     "madrid": "Europe/Madrid",
     "rome": "Europe/Rome",
     "moscow": "Europe/Moscow",
+    "moscou": "Europe/Moscow",
     "dubai": "Asia/Dubai",
     "singapore": "Asia/Singapore",
+    "singapour": "Asia/Singapore",
     "hong kong": "Asia/Hong_Kong",
     "shanghai": "Asia/Shanghai",
     "beijing": "Asia/Shanghai",
+    "pekin": "Asia/Shanghai",
     "sydney": "Australia/Sydney",
     "delhi": "Asia/Kolkata",
     "mumbai": "Asia/Kolkata",
     "kolkata": "Asia/Kolkata",
     "sao paulo": "America/Sao_Paulo",
     "toronto": "America/Toronto",
+    "geneve": "Europe/Zurich",
+    "bruxelles": "Europe/Brussels",
+    # Countries (English + French)
+    "france": "Europe/Paris",
+    "japon": "Asia/Tokyo",
+    "japan": "Asia/Tokyo",
+    "royaume-uni": "Europe/London",
+    "angleterre": "Europe/London",
+    "allemagne": "Europe/Berlin",
+    "germany": "Europe/Berlin",
+    "espagne": "Europe/Madrid",
+    "spain": "Europe/Madrid",
+    "italie": "Europe/Rome",
+    "italy": "Europe/Rome",
+    "etats-unis": "America/New_York",
+    "united states": "America/New_York",
+    "usa": "America/New_York",
+    "canada": "America/Toronto",
+    "australie": "Australia/Sydney",
+    "australia": "Australia/Sydney",
+    "chine": "Asia/Shanghai",
+    "china": "Asia/Shanghai",
+    "inde": "Asia/Kolkata",
+    "india": "Asia/Kolkata",
+    "russie": "Europe/Moscow",
+    "russia": "Europe/Moscow",
+    "bresil": "America/Sao_Paulo",
+    "brazil": "America/Sao_Paulo",
+    "suisse": "Europe/Zurich",
+    "belgique": "Europe/Brussels",
 }
+
+# Keys whose natural label is an acronym (uppercased, not title-cased).
+_ACRONYM_ZONE_KEYS: frozenset[str] = frozenset({"utc", "gmt", "usa"})
 
 
 def resolve_requested_timezone(user_input: str) -> tuple[Any, str]:
@@ -218,7 +259,7 @@ def resolve_requested_timezone(user_input: str) -> tuple[Any, str]:
     for key in sorted(_CITY_TIMEZONES, key=len, reverse=True):
         if re.search(rf"\b{re.escape(key)}\b", text):
             iana = _CITY_TIMEZONES[key]
-            label = key.upper() if key in {"utc", "gmt"} else key.title()
+            label = key.upper() if key in _ACRONYM_ZONE_KEYS else key.title()
             try:
                 return ZoneInfo(iana), label
             except (ZoneInfoNotFoundError, OSError):
