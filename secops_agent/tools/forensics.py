@@ -564,6 +564,7 @@ async def sysinfo(category: str = "all") -> str:
     if category in ("all", "resources"):
         result += "── Resources ──\n"
         result += f"  CPU cores: {await get_cmd('nproc 2>/dev/null')}\n"
+        result += f"  CPU load (1/5/15m): {await get_cmd('cut -d\" \" -f1-3 /proc/loadavg 2>/dev/null || uptime')}\n"
         result += f"  CPU model: {await get_cmd('grep -m1 \"model name\" /proc/cpuinfo | cut -d: -f2- | sed \"s/^ //\" || lscpu 2>/dev/null | grep \"Model name\"')}\n"
         result += f"  Memory: {await get_cmd('free -h 2>/dev/null | grep -i \"^Mem:\" || free -h 2>/dev/null')}\n"
         result += f"  Disk (/): {await get_cmd('df -h / 2>/dev/null | tail -1')}\n\n"

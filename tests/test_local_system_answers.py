@@ -116,5 +116,34 @@ class PublicIpAnswerTests(unittest.TestCase):
         self.assertIn("locale", answer.lower())
 
 
+class CpuLoadAnswerTests(unittest.TestCase):
+    """D7: 'quelle est la charge CPU actuelle ?' returned a static core count
+    (or fell through to the LLM). It must report the real load average."""
+
+    def setUp(self) -> None:
+        self.router = PreflightRouter(registry=ToolRegistry())
+
+    def _answer(self, prompt: str) -> str:
+        return self.router.local_answer(prompt, classify_request(prompt))
+
+    def test_cpu_load_phrasings_classify_local(self) -> None:
+        for prompt in (
+            "quelle est la charge CPU actuelle ?",
+            "what is the current CPU load?",
+            "utilisation du cpu",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(
+                    classify_request(prompt).technical_goal, TechnicalGoal.LOCAL_SYSTEM
+                )
+
+    def test_cpu_load_answer_reports_load_average(self) -> None:
+        answer = self._answer("quelle est la charge CPU actuelle ?")
+        self.assertTrue(answer, "no deterministic CPU-load answer")
+        self.assertIn("charge", answer.lower())
+        # the three load-average figures, e.g. "0.52"
+        self.assertRegex(answer, r"\d+\.\d{2}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ core ReAct orchestration and makes the routing rules easier to test.
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import shutil
@@ -557,6 +558,40 @@ class PreflightRouter:
             if french:
                 return f"Le système exécute {os_name} avec le noyau {kernel} sur {arch}."
             return f"The system is running {os_name} with kernel {kernel} on {arch}."
+
+        if any(
+            marker in text
+            for marker in (
+                "charge cpu",
+                "charge du cpu",
+                "charge processeur",
+                "charge du processeur",
+                "utilisation cpu",
+                "utilisation du cpu",
+                "cpu load",
+                "cpu usage",
+                "load average",
+                "loadavg",
+            )
+        ):
+            try:
+                one, five, fifteen = os.getloadavg()
+            except (OSError, AttributeError):
+                return (
+                    "Je n'ai pas pu lire la charge CPU sur ce système."
+                    if french
+                    else "I could not read the CPU load on this system."
+                )
+            cores = os.cpu_count() or 1
+            if french:
+                return (
+                    f"Charge CPU (moyennes 1/5/15 min) : {one:.2f}, {five:.2f}, "
+                    f"{fifteen:.2f} sur {cores} cœur(s)."
+                )
+            return (
+                f"CPU load average (1/5/15 min): {one:.2f}, {five:.2f}, "
+                f"{fifteen:.2f} across {cores} core(s)."
+            )
 
         local_ip_intent = any(
             marker in text

@@ -14,6 +14,11 @@ class SysinfoResourcesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Memory", out)
         self.assertIn("Disk", out)
 
+    async def test_resources_category_reports_cpu_load(self) -> None:
+        # D7: report actual CPU load, not just the static core count.
+        out = await sysinfo(category="resources")
+        self.assertIn("load", out.lower())
+
     async def test_all_category_includes_resources_section(self) -> None:
         out = await sysinfo(category="all")
         self.assertIn("Resources", out)
