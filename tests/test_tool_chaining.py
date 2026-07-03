@@ -697,7 +697,7 @@ What is the hidden directory?
             ],
         )
         self.assertIn("Résultat Nmap", first_text)
-        self.assertIn("Ports ouverts: 1", first_text)
+        self.assertIn("Port ouvert: 1", first_text)
         self.assertIn("Question restante: trouver le hidden directory", first_text)
         self.assertIn("Résultat GoBuster", next_text)
         self.assertIn("/panel", next_text)

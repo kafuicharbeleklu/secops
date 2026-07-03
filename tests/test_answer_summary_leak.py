@@ -133,6 +133,26 @@ class AnswerSummaryLeakTests(unittest.TestCase):
         )
         self.assertEqual(answer, "Hostname: box")
 
+    def test_nmap_summary_french_plural_agreement(self) -> None:
+        # R4: the count must agree in number — "1 port ouvert", "N ports ouverts".
+        from types import SimpleNamespace
+
+        def svc(port: int):
+            return SimpleNamespace(
+                state="open", port=port, protocol="tcp", service="http", version=""
+            )
+
+        one = ParsedResult(tool_name="nmap_scan", services_discovered=[svc(80)])
+        ans_one = self.agent._format_tool_answer_summary("nmap_scan", {"target": "t"}, one)
+        self.assertIn("Port ouvert", ans_one)
+        self.assertNotIn("Ports ouverts", ans_one)
+
+        many = ParsedResult(
+            tool_name="nmap_scan", services_discovered=[svc(80), svc(443)]
+        )
+        ans_many = self.agent._format_tool_answer_summary("nmap_scan", {"target": "t"}, many)
+        self.assertIn("Ports ouverts", ans_many)
+
 
 if __name__ == "__main__":
     unittest.main()

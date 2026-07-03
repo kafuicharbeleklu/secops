@@ -1081,9 +1081,10 @@ class SecOpsAgent:
 
             target = str(arguments.get("target") or "").strip() or "target"
             ports = ", ".join(f"{svc.port}/{svc.protocol}" for svc in services)
+            port_label = "Port ouvert" if len(services) == 1 else "Ports ouverts"
             lines = [
                 f"Résultat Nmap pour `{target}`:",
-                f"1. Ports ouverts: {len(services)} ({ports}).",
+                f"1. {port_label}: {len(services)} ({ports}).",
             ]
 
             web_service = next(

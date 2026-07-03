@@ -97,7 +97,8 @@ class SynthesisErrorFallbackTests(unittest.IsolatedAsyncioTestCase):
         # the transient synthesis error is still surfaced (not hidden)
         self.assertTrue(any(isinstance(e, ErrorEvent) for e in events))
         # A5: the correct tool result is presented instead of an empty turn
-        self.assertIn("Ports ouverts", full_text)
+        # (single open port → singular French agreement, R4).
+        self.assertIn("Port ouvert", full_text)
         self.assertIn("631/tcp", full_text)
 
     async def test_generic_tool_fallback_has_no_collapse_trailer(self) -> None:
