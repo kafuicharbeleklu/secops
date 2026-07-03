@@ -3609,5 +3609,37 @@ class SummarizeOutputLeadsWithKeyFactTests(unittest.TestCase):
         self.assertEqual(summary["visible_lines"], 2)
 
 
+class StartThinkingDefensiveStopTests(unittest.TestCase):
+    """R2 (latent): _start_thinking must defensively stop a spinner still
+    running from a prior thinking phase, like _start_tool_feedback does, so two
+    Live displays never stack (which would raise a rich LiveError)."""
+
+    def test_second_start_thinking_stops_the_first_spinner(self):
+        class _FakeSpinner:
+            instances: list = []
+
+            def __init__(self, *args, **kwargs):
+                self.stopped = False
+                self.started = False
+                _FakeSpinner.instances.append(self)
+
+            def start(self):
+                self.started = True
+
+            def stop(self):
+                self.stopped = True
+
+        renderer = Renderer()
+        with patch("secops_agent.ui.renderer.ThinkingSpinner", _FakeSpinner):
+            _FakeSpinner.instances.clear()
+            renderer._start_thinking()
+            renderer._start_thinking()  # would stack a 2nd Live without the fix
+
+        self.assertEqual(len(_FakeSpinner.instances), 2)
+        first, second = _FakeSpinner.instances
+        self.assertTrue(first.stopped, "first thinking spinner was not defensively stopped")
+        self.assertTrue(second.started)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3306,6 +3306,12 @@ class Renderer:
 
     def _start_thinking(self, status_right: str = ""):
         """Record thinking start time."""
+        # Defensively stop a spinner still running from a prior thinking phase so
+        # two Live displays never stack (mirrors _start_tool_feedback → R2 latent).
+        if self._thinking_spinner is not None:
+            with contextlib.suppress(Exception):
+                self._thinking_spinner.stop()
+            self._thinking_spinner = None
         self._thinking_start = time.monotonic()
         self._thinking_content = ""
         self._thinking_spinner = ThinkingSpinner(
