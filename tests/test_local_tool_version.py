@@ -4,8 +4,9 @@ service-version questions must stay SERVICE_ENUM (not hijacked)."""
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
-from secops_agent.core.preflight import PreflightRouter
+from secops_agent.core.preflight import PreflightRouter, describe_local_tools
 from secops_agent.core.request_context import TechnicalGoal, classify_request
 from secops_agent.core.tools import ToolRegistry
 
@@ -39,6 +40,22 @@ class LocalToolVersionTests(unittest.TestCase):
             TechnicalGoal.LOCAL_SYSTEM,
         )
         self.assertTrue(self._answer("what tools are installed?"))
+
+
+class FrenchSingleToolWordingTests(unittest.TestCase):
+    """D8: a French question about one tool must read as a natural French
+    sentence, not the English 'sqlmap: not installed' status line."""
+
+    def test_french_single_tool_not_installed_is_clean_sentence(self) -> None:
+        with patch("secops_agent.core.preflight.shutil.which", return_value=None):
+            answer = describe_local_tools("quelle version de sqlmap est installée ?")
+        self.assertEqual(answer, "sqlmap n'est pas installé.")
+
+    def test_english_single_tool_keeps_status_format(self) -> None:
+        with patch("secops_agent.core.preflight.shutil.which", return_value=None):
+            answer = describe_local_tools("what version of sqlmap is installed?")
+        self.assertIn("sqlmap", answer)
+        self.assertIn("not installed", answer)
 
 
 if __name__ == "__main__":

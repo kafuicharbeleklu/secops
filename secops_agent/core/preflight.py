@@ -211,6 +211,15 @@ def describe_local_tools(user_input: str) -> str:
         if re.search(rf"\b{re.escape(tool)}\b", text)
     ]
     if named:
+        if french and len(named) == 1:
+            # D8: a single named tool reads best as a plain French sentence.
+            tool = named[0]
+            if not shutil.which(tool):
+                return f"{tool} n'est pas installé."
+            detail = _tool_version_line(tool).split(":", 1)[1].strip()
+            if not detail or detail.startswith("installed ("):
+                return f"{tool} est installé."
+            return f"{tool} est installé : {detail}."
         lines = [_tool_version_line(tool) for tool in named]
         header = "État des outils locaux :" if french else "Local tool status:"
         return header + "\n" + "\n".join(f"  {line}" for line in lines)
