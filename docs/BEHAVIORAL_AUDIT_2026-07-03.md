@@ -143,13 +143,15 @@ before the next (existing suites to extend named in *[brackets]*).
 > (public IP, gated by `SECOPS_PUBLIC_IP_LOOKUP`), **P0-4** (transient-500 never empty),
 > **P0-5** (input queue — the drop was the streaming key-watcher discarding non-control
 > bytes; reproduced 0/3 → fixed 3/3 on a live turn), **P1-2** (D7 CPU load + D8 FR wording),
-> **P1-3** (R2 `_start_thinking` defensive stop), **P2-2** (R4 FR plural agreement).
+> **P1-3** (R2 `_start_thinking` defensive stop), **P1-4** (G4 — surface autonomy posture +
+> mission phase in the statusline, **display-only**, safety gate unchanged),
+> **P2-2** (R4 FR plural agreement).
 > **Deferred — P1-1 (D6):** the run-on is intermittent and tied to LLM stream-chunk
 > boundaries; came out clean on every reproduction attempt, so there is no reliable failing
-> case to test against — needs a live capture to pin the exact join site. **Remaining:**
-> **P1-4** (phase→autonomy posture — architectural, warrants a design pass, not a blind
-> change to autonomy), **P2-1** (status-bar token/context/session), **P2-3** (elapsed-time
-> wiring).
+> case to test against — needs a live capture to pin the exact join site. **Not pursued
+> (low value):** **P2-1** (G2) — the statusline already carries tokens/tasks/tools/dirs and
+> now posture/phase, so the gap is effectively closed; **P2-3** (elapsed-time) — the audit
+> itself lists it under *Verified-good, no action* ("honest, minor wiring gap").
 
 ### P0 — blocking coherence & robustness
 - **P0-1 · Kill the raw-summary leak (RC-α → D1, D1b, D5-leak / gap G1).** Separate a clean
