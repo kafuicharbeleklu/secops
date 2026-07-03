@@ -113,6 +113,48 @@ def local_ip_addresses() -> list[str]:
     return addresses
 
 
+# Public-IP echo services, tried in order. Read-only egress; the caller gates it.
+_PUBLIC_IP_ENDPOINTS = (
+    "https://api.ipify.org",
+    "https://icanhazip.com",
+    "https://ifconfig.me/ip",
+)
+
+
+def _looks_like_ip(value: str) -> bool:
+    if not value:
+        return False
+    if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", value):
+        return all(0 <= int(part) <= 255 for part in value.split("."))
+    return ":" in value and bool(re.fullmatch(r"[0-9A-Fa-f:]+", value))
+
+
+def public_ip_lookup_enabled() -> bool:
+    """Whether the gated public-IP egress lookup is allowed (config)."""
+    from secops_agent.config import settings
+
+    return settings.PUBLIC_IP_LOOKUP not in {"off", "0", "false", "no", "never", "disabled"}
+
+
+def public_ip_address(timeout: float = 3.0) -> str:
+    """Best-effort public IP via an external echo service; "" on any failure.
+
+    Network egress — callers must check ``public_ip_lookup_enabled()`` first.
+    """
+    import urllib.request
+
+    for url in _PUBLIC_IP_ENDPOINTS:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+                body = resp.read(128).decode("utf-8", "replace").strip()
+        except Exception:
+            continue
+        candidate = body.split()[0] if body else ""
+        if _looks_like_ip(candidate):
+            return candidate
+    return ""
+
+
 # Common local CLI tools the agent may be asked about ("is nmap installed?",
 # "what tools are installed?"). Version probing is only run for tools known to
 # support a fast, non-interactive --version.
@@ -533,6 +575,43 @@ class PreflightRouter:
             marker in text
             for marker in ("target ip", "target ip address", "ip cible", "adresse ip cible")
         )
+        # Public IP must be checked before local IP: "mon adresse ip" is a
+        # substring of "mon adresse ip publique" (D4). Answering it needs an
+        # external echo service, which is gated.
+        public_ip_intent = any(
+            marker in text
+            for marker in (
+                "public ip",
+                "external ip",
+                "wan ip",
+                "ip publique",
+                "adresse ip publique",
+                "adresses ip publiques",
+                "ip externe",
+                "adresse ip externe",
+            )
+        )
+        if public_ip_intent and not target_ip_context:
+            if not public_ip_lookup_enabled():
+                return (
+                    "Pour connaître votre adresse IP publique, j'interroge un service "
+                    "externe, mais cette recherche est désactivée (SECOPS_PUBLIC_IP_LOOKUP)."
+                    if french
+                    else "Determining your public IP requires an external service, "
+                    "which is disabled (SECOPS_PUBLIC_IP_LOOKUP)."
+                )
+            ip = public_ip_address()
+            if ip:
+                return (
+                    f"Votre adresse IP publique est: {ip}."
+                    if french
+                    else f"Your public IP address is: {ip}."
+                )
+            return (
+                "Je n'ai pas pu récupérer l'adresse IP publique (service externe injoignable)."
+                if french
+                else "I could not retrieve the public IP address (external service unreachable)."
+            )
         if local_ip_intent and not target_ip_context:
             addresses = local_ip_addresses()
             if not addresses:

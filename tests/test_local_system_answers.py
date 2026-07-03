@@ -4,6 +4,7 @@ through to the LLM."""
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from secops_agent.core.preflight import PreflightRouter
 from secops_agent.core.request_context import TechnicalGoal, classify_request
@@ -58,6 +59,61 @@ class LocalSystemPhrasingTests(unittest.TestCase):
         self.assertNotIn("Not found", answer)
         # nmap is present on this host's common set; the overview must name it.
         self.assertIn("nmap", answer)
+
+
+class PublicIpAnswerTests(unittest.TestCase):
+    """D4 / RC-β: 'mon adresse ip' is a substring of 'mon adresse ip publique',
+    so a public-IP query wrongly returned the local interface, and the English
+    'public IP' missed the LOCAL_SYSTEM classifier entirely."""
+
+    def setUp(self) -> None:
+        self.router = PreflightRouter(registry=ToolRegistry())
+
+    def _answer(self, prompt: str) -> str:
+        return self.router.local_answer(prompt, classify_request(prompt))
+
+    def test_public_ip_english_classifies_local(self) -> None:
+        for prompt in ("what is my public IP?", "what's my external ip address?"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(
+                    classify_request(prompt).technical_goal, TechnicalGoal.LOCAL_SYSTEM
+                )
+
+    def test_public_ip_query_fetches_public_not_local(self) -> None:
+        with patch(
+            "secops_agent.core.preflight.public_ip_address", return_value="203.0.113.7"
+        ), patch(
+            "secops_agent.core.preflight.public_ip_lookup_enabled", return_value=True
+        ):
+            answer = self._answer("quelle est mon adresse IP publique ?")
+        self.assertIn("203.0.113.7", answer)
+        self.assertIn("publique", answer.lower())
+        self.assertNotIn("192.168", answer)
+        self.assertNotIn("locale", answer.lower())
+
+    def test_public_ip_fetch_failure_is_clean_message(self) -> None:
+        with patch(
+            "secops_agent.core.preflight.public_ip_address", return_value=""
+        ), patch(
+            "secops_agent.core.preflight.public_ip_lookup_enabled", return_value=True
+        ):
+            answer = self._answer("quelle est mon adresse IP publique ?")
+        self.assertTrue(answer)
+        self.assertIn("publique", answer.lower())
+        self.assertNotIn("192.168", answer)
+
+    def test_public_ip_lookup_gate_disabled_does_not_fetch(self) -> None:
+        with patch(
+            "secops_agent.core.preflight.public_ip_lookup_enabled", return_value=False
+        ), patch("secops_agent.core.preflight.public_ip_address") as fetch:
+            answer = self._answer("quelle est mon adresse IP publique ?")
+        fetch.assert_not_called()
+        self.assertTrue(answer)
+        self.assertNotIn("192.168", answer)
+
+    def test_local_ip_query_still_returns_local(self) -> None:
+        answer = self._answer("quelle est mon adresse IP locale ?")
+        self.assertIn("locale", answer.lower())
 
 
 if __name__ == "__main__":

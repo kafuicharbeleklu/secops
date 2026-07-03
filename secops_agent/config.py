@@ -17,6 +17,10 @@ class Config:
     MODEL_TEMPERATURE: float = float(os.getenv("MODEL_TEMPERATURE", "0.7"))
     MODEL_MAX_TOKENS: int = int(os.getenv("MODEL_MAX_TOKENS", "8192"))
     GOOGLE_SEARCH_GROUNDING: str = os.getenv("GOOGLE_SEARCH_GROUNDING", "auto").strip().casefold()
+    # Gate the one local-answer that requires outbound egress: the public-IP
+    # lookup ("what's my public IP"). Set to off/0/false/no to disable it in
+    # sensitive engagements. Enabled by default.
+    PUBLIC_IP_LOOKUP: str = os.getenv("SECOPS_PUBLIC_IP_LOOKUP", "auto").strip().casefold()
     AGENT_NAME: str = os.getenv("AGENT_NAME", "SecOps Agent")
     MAX_TOOL_RETRIES: int = int(os.getenv("MAX_TOOL_RETRIES", "3"))
     TOOL_TIMEOUT: int = int(os.getenv("TOOL_TIMEOUT", "120"))
