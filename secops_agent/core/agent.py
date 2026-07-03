@@ -894,6 +894,21 @@ class SecOpsAgent:
         )
 
     @staticmethod
+    def _transient_llm_notice(user_input: str) -> str:
+        """Clean user-facing message when a transient LLM error leaves a turn
+        with no tool result to present (RC-γ / D5). The turn must never end
+        empty; degrade to a clear, actionable notice instead."""
+        if SecOpsAgent._prefers_french(user_input):
+            return (
+                "Le service de modèle est momentanément indisponible "
+                "(erreur transitoire). Merci de réessayer dans un instant."
+            )
+        return (
+            "The model service is momentarily unavailable (transient error). "
+            "Please try again in a moment."
+        )
+
+    @staticmethod
     def _os_release_pretty_name() -> str:
         path = Path("/etc/os-release")
         try:
@@ -1728,6 +1743,16 @@ class SecOpsAgent:
                             yield TextEvent(content=pending_tool_summary)
                             self.memory.add_assistant_message(pending_tool_summary)
                             pending_tool_summary = ""
+                        elif (
+                            not current_response_text.strip()
+                            and self._is_retriable_llm_error(llm_item.error)
+                        ):
+                            # RC-γ / D5: a transient error on the first (tool-
+                            # selection) call leaves no tool result to fall back
+                            # on. Never end empty — surface a clean notice.
+                            notice = self._transient_llm_notice(user_input)
+                            yield TextEvent(content=notice)
+                            self.memory.add_assistant_message(notice)
                         yield llm_item
                         return
                     chunk = llm_item

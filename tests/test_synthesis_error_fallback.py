@@ -153,5 +153,47 @@ class SynthesisErrorFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("more line(s)", full_text)
 
 
+class FirstCallTransientErrorLLM:
+    """The first (tool-selection) call fails with a transient 500 — no tool runs,
+    so there is no result to fall back on."""
+
+    model_name = "fake-model"
+
+    def prepare_for_prompt(self, prompt: str, **kwargs) -> None:
+        return None
+
+    async def stream_chat(self, messages: list[Message], tools_schema=None):
+        yield StreamChunk(error="Gemini API Error: 500 INTERNAL")
+
+
+class FirstCallTransientErrorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_transient_first_call_error_never_ends_empty(self) -> None:
+        """RC-γ / D5: a transient error on the first LLM call must surface a
+        clean notice, never leave the turn empty."""
+        agent = SecOpsAgent(
+            llm=FirstCallTransientErrorLLM(),
+            registry=ToolRegistry(),
+            memory=ConversationMemory(),
+            permissions=PermissionEngine(),
+            result_parser=ToolResultParser(),
+            max_iterations=2,
+            llm_max_attempts=1,  # no backoff — go straight to the ErrorEvent
+        )
+
+        events = []
+        async for event in agent.stream_response(
+            "explique ta méthodologie de test d'intrusion"
+        ):
+            events.append(event)
+
+        full_text = "".join(e.content for e in events if isinstance(e, TextEvent))
+        # the turn is not left empty
+        self.assertTrue(full_text.strip(), "transient first-call error left the turn empty")
+        # a clean French "service unavailable, retry" notice
+        self.assertIn("indisponible", full_text.lower())
+        # the transient error is still surfaced (not silently swallowed)
+        self.assertTrue(any(isinstance(e, ErrorEvent) for e in events))
+
+
 if __name__ == "__main__":
     unittest.main()
