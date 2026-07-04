@@ -4,6 +4,7 @@ through to the LLM."""
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from secops_agent.core.preflight import PreflightRouter
@@ -185,6 +186,61 @@ class DiskSpaceAnswerTests(unittest.TestCase):
         self.assertTrue(answer)
         self.assertIn("GB", answer)
         self.assertNotIn("CPU cores", answer)
+
+
+class MemoryAnswerTests(unittest.TestCase):
+    """RC-α residual (2026-07-04): 'combien de mémoire vive disponible ?' shared
+    D10's leak class — no classifier marker, no local_answer block → routed to
+    sysinfo and leaked its first line. Must classify LOCAL_SYSTEM and report RAM,
+    never the CPU line."""
+
+    def setUp(self) -> None:
+        self.router = PreflightRouter(registry=ToolRegistry())
+
+    def _answer(self, prompt: str) -> str:
+        return self.router.local_answer(prompt, classify_request(prompt))
+
+    def test_memory_phrasings_classify_local(self) -> None:
+        for prompt in (
+            "combien de mémoire vive disponible ?",
+            "how much RAM is available?",
+            "memory usage",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(
+                    classify_request(prompt).technical_goal, TechnicalGoal.LOCAL_SYSTEM
+                )
+
+    def test_memory_answer_reports_ram_not_cpu(self) -> None:
+        if not Path("/proc/meminfo").exists():
+            self.skipTest("no /proc/meminfo on this platform")
+        answer = self._answer("combien de mémoire vive disponible ?")
+        self.assertTrue(answer, "no deterministic memory answer")
+        self.assertNotIn("CPU cores", answer)
+        self.assertNotIn("(+", answer)  # no parser collapse trailer
+        self.assertIn("Go", answer)  # French
+        self.assertRegex(answer, r"\d")
+
+    def test_memory_english_answer(self) -> None:
+        if not Path("/proc/meminfo").exists():
+            self.skipTest("no /proc/meminfo on this platform")
+        answer = self._answer("how much RAM is available?")
+        self.assertTrue(answer)
+        self.assertIn("GB", answer)
+        self.assertNotIn("CPU cores", answer)
+
+
+class TransientNoticeLanguageParityTests(unittest.TestCase):
+    """RC-β: the transient-error notice used a *separate* prefers_french that
+    missed 'combien', so a French question got an English notice. The agent's
+    detector is now unified with the preflight one."""
+
+    def test_agent_prefers_french_matches_preflight(self) -> None:
+        from secops_agent.core.agent import SecOpsAgent
+
+        self.assertTrue(SecOpsAgent._prefers_french("combien de mémoire vive disponible ?"))
+        self.assertTrue(SecOpsAgent._prefers_french("quelle heure est-il ?"))
+        self.assertFalse(SecOpsAgent._prefers_french("how much RAM is available?"))
 
 
 if __name__ == "__main__":

@@ -92,6 +92,25 @@ def os_release_pretty_name() -> str:
     return platform.platform()
 
 
+def read_meminfo() -> tuple[int, int] | None:
+    """Return (MemTotal, MemAvailable) in kB from /proc/meminfo, or None if it
+    cannot be read (non-Linux, or fields absent)."""
+    total = available = None
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                total = int(line.split()[1])
+            elif line.startswith("MemAvailable:"):
+                available = int(line.split()[1])
+            if total is not None and available is not None:
+                break
+    except (OSError, ValueError, IndexError):
+        return None
+    if total is None or available is None:
+        return None
+    return total, available
+
+
 def local_ip_addresses() -> list[str]:
     addresses: list[str] = []
     try:
@@ -645,6 +664,47 @@ class PreflightRouter:
             return (
                 f"{free_gb:.1f} GB free on / "
                 f"({used_pct:.0f}% used, {total_gb:.1f} GB total)."
+            )
+
+        if any(
+            marker in text
+            for marker in (
+                "memoire vive",
+                "memoire disponible",
+                "combien de ram",
+                "ram disponible",
+                "how much ram",
+                "how much memory",
+                "ram usage",
+                "memory usage",
+                "free memory",
+                "available memory",
+                "free ram",
+                "available ram",
+            )
+        ):
+            # RC-α residual: without this, RAM queries routed to `sysinfo` and
+            # leaked its first line ("CPU cores: 8"), exactly like D10 for disk.
+            meminfo = read_meminfo()
+            if meminfo is None:
+                return (
+                    "Je n'ai pas pu lire la mémoire vive sur ce système."
+                    if french
+                    else "I could not read the memory on this system."
+                )
+            total_kb, avail_kb = meminfo
+            gib = 1024 * 1024
+            avail_gb = avail_kb / gib
+            total_gb = total_kb / gib
+            used_pct = (1 - avail_kb / total_kb) * 100 if total_kb else 0.0
+            if french:
+                return (
+                    f"Il reste {avail_gb:.1f} Go de mémoire vive libre sur "
+                    f"{total_gb:.1f} Go ({used_pct:.0f} % utilisé)."
+                )
+            return (
+                f"{avail_gb:.1f} GB of RAM free out of {total_gb:.1f} GB "
+                f"({used_pct:.0f}% used)."
             )
 
         local_ip_intent = any(

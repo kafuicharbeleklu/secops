@@ -56,6 +56,7 @@ from secops_agent.core.permissions import (
 )
 from secops_agent.core.scope_guard import ScopeGuard
 from secops_agent.core.preflight import PreflightRouter
+from secops_agent.core.preflight import prefers_french as _preflight_prefers_french
 
 # Optional imports for Phase 2 features (structured memory & parsing)
 try:
@@ -889,21 +890,10 @@ class SecOpsAgent:
 
     @staticmethod
     def _prefers_french(user_input: str) -> bool:
-        text = SecOpsAgent._plain_text(user_input)
-        return any(
-            marker in text
-            for marker in (
-                "quelle",
-                "quel ",
-                "quels ",
-                "quelles ",
-                "mon systeme",
-                "mon système",
-                "adresse ip",
-                "c'est quoi",
-                "explique",
-            )
-        )
+        # Unified with the preflight detector (RC-β parity): the transient-error
+        # notice and the deterministic local answers must agree on language, so a
+        # French "combien …" question never gets an English notice.
+        return _preflight_prefers_french(user_input)
 
     @staticmethod
     def _transient_llm_notice(user_input: str) -> str:
