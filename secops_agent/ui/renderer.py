@@ -596,16 +596,31 @@ def _classify_stream_key_chunk(data: bytes) -> str:
     return "text"
 
 
-def _parse_typeahead_lines(raw: bytes) -> list[str]:
-    """Turn captured typed-ahead bytes into complete, submittable instructions.
+# Bracketed-paste delimiters (DEC private mode 2004). A multi-line message pasted
+# while the agent streams must stay ONE instruction (Example H) instead of being
+# split per line like several distinct typed-ahead instructions (Example E).
+_PASTE_START = "\x1b[200~"
+_PASTE_END = "\x1b[201~"
+_PASTE_START_B = _PASTE_START.encode()
+_PASTE_END_B = _PASTE_END.encode()
+_ENABLE_BRACKETED_PASTE = "\x1b[?2004h"
+_DISABLE_BRACKETED_PASTE = "\x1b[?2004l"
 
-    Input arrives in cbreak mode, so Enter is CR. Split on CR/LF, drop empties
-    and any fragment still carrying control/escape bytes (stray arrow keys etc.).
-    A trailing fragment with no terminator is held back (not returned).
-    """
-    if not raw:
-        return []
-    text = raw.decode("utf-8", "ignore")
+
+def _write_terminal(seq: str) -> None:
+    """Best-effort write of a terminal control sequence to stdout."""
+    try:
+        if sys.stdout.isatty():
+            sys.stdout.write(seq)
+            sys.stdout.flush()
+    except Exception:
+        pass
+
+
+def _split_typed_lines(text: str) -> list[str]:
+    """Split typed-ahead text into complete instructions on CR/LF, dropping
+    empties and any fragment still carrying control/escape bytes (stray arrow
+    keys etc.)."""
     lines: list[str] = []
     for chunk in re.split(r"[\r\n]+", text):
         stripped = chunk.strip()
@@ -615,6 +630,59 @@ def _parse_typeahead_lines(raw: bytes) -> list[str]:
             continue
         lines.append(stripped)
     return lines
+
+
+def _coalesce_paste_block(block: str) -> str:
+    """Collapse the body of a bracketed paste into a single instruction: keep its
+    non-blank lines (a multi-line message is ONE instruction) joined with
+    newlines. Returns '' if nothing printable remains."""
+    kept = [ln.strip() for ln in re.split(r"[\r\n]+", block) if ln.strip()]
+    return "\n".join(kept).strip()
+
+
+def _parse_typeahead_lines(raw: bytes) -> list[str]:
+    """Turn captured typed-ahead bytes into complete, submittable instructions.
+
+    Input arrives in cbreak mode, so Enter is CR. Typed lines split on CR/LF —
+    several instructions typed ahead stay several instructions (Example E). A
+    bracketed-paste block (ESC[200~ … ESC[201~) is coalesced into ONE instruction
+    so a single multi-line paste is not fragmented (Example H). A trailing
+    fragment with no terminator is held back by the drain cut, not here.
+    """
+    if not raw:
+        return []
+    text = raw.decode("utf-8", "ignore")
+    out: list[str] = []
+    while True:
+        start = text.find(_PASTE_START)
+        if start == -1:
+            out.extend(_split_typed_lines(text))
+            break
+        out.extend(_split_typed_lines(text[:start]))
+        end = text.find(_PASTE_END, start + len(_PASTE_START))
+        if end == -1:
+            break  # unterminated paste (held back by the drain cut)
+        pasted = _coalesce_paste_block(text[start + len(_PASTE_START):end])
+        if pasted:
+            out.append(pasted)
+        text = text[end + len(_PASTE_END):]
+    return out
+
+
+def _typeahead_cut_index(raw: bytes) -> int:
+    """Byte offset up to which the type-ahead buffer holds only *complete* units
+    (Enter-terminated lines and closed paste blocks). An in-progress paste — or a
+    trailing unterminated line before it — is held back for the next drain."""
+    last_start = raw.rfind(_PASTE_START_B)
+    last_end = raw.rfind(_PASTE_END_B)
+    if last_start != -1 and (last_end == -1 or last_end < last_start):
+        # a paste is open: hold it and any unterminated line right before it
+        prior = max(raw.rfind(b"\r", 0, last_start), raw.rfind(b"\n", 0, last_start))
+        return prior + 1 if prior != -1 else 0
+    cr = max(raw.rfind(b"\r"), raw.rfind(b"\n"))
+    pe = last_end + len(_PASTE_END_B) if last_end != -1 else -1
+    cut = max(cr + 1 if cr != -1 else -1, pe)
+    return cut if cut != -1 else 0
 
 
 class _EscInterruptMonitor:
@@ -630,6 +698,10 @@ class _EscInterruptMonitor:
         # here (instead of being discarded) so the loop can queue them.
         self._typed = bytearray()
         self._buffer_lock = threading.Lock()
+        # Example H: track an in-progress bracketed paste so its content is kept
+        # as one instruction and its ESC-bearing end marker never trips interrupt.
+        self._in_paste = False
+        self._paste_carry = b""
 
     def _capture(self, data: bytes) -> None:
         with self._buffer_lock:
@@ -637,14 +709,12 @@ class _EscInterruptMonitor:
 
     def drain_typeahead(self) -> list[str]:
         """Return complete typed-ahead instructions captured during the turn,
-        holding back any trailing unterminated fragment for the next drain."""
+        holding back any trailing unterminated fragment (or in-progress paste)
+        for the next drain."""
         with self._buffer_lock:
             raw = bytes(self._typed)
-            idx = max(raw.rfind(b"\r"), raw.rfind(b"\n"))
-            if idx == -1:
-                terminated, tail = b"", raw  # nothing submitted yet
-            else:
-                terminated, tail = raw[: idx + 1], raw[idx + 1:]
+            cut = _typeahead_cut_index(raw)
+            terminated, tail = raw[:cut], raw[cut:]
             self._typed = bytearray(tail)
             return _parse_typeahead_lines(terminated)
 
@@ -654,6 +724,12 @@ class _EscInterruptMonitor:
         if not sys.stdin.isatty():
             return
         self._stop.clear()
+        self._in_paste = False
+        self._paste_carry = b""
+        # Example H: enable bracketed paste on the MAIN thread only — never from
+        # the reader thread, where a mid-frame write would corrupt Rich's escape
+        # stream. Terminals that ignore it degrade to per-line typed-ahead.
+        _write_terminal(_ENABLE_BRACKETED_PASTE)
         self._loop = asyncio.get_running_loop()
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
@@ -666,6 +742,7 @@ class _EscInterruptMonitor:
             deadline = time.monotonic() + 0.25
             while thread.is_alive() and time.monotonic() < deadline:
                 await asyncio.sleep(0.01)
+        _write_terminal(_DISABLE_BRACKETED_PASTE)
 
     def clear(self) -> None:
         if self.event.is_set():
@@ -681,6 +758,43 @@ class _EscInterruptMonitor:
         if self._loop and not self._loop.is_closed():
             self._loop.call_soon_threadsafe(self.expand_event.set)
 
+    def _dispatch_read(self, data: bytes) -> str:
+        """Classify one raw stdin read during streaming, updating paste state and
+        capturing typed-ahead/paste bytes. Returns 'expand', 'interrupt' or
+        'consumed'. Ctrl-C always interrupts (a safety valve, even mid-paste);
+        Ctrl-O / Esc keep their precedence only when *not* inside a paste, so a
+        paste's ESC-bearing end marker can never trip interrupt (Example H)."""
+        if b"\x03" in data:  # Ctrl-C — always abort, even mid-paste
+            return "interrupt"
+        if self._in_paste:
+            self._capture(data)
+            combined = self._paste_carry + data
+            if _PASTE_END_B in combined:
+                self._in_paste = False
+                self._paste_carry = b""
+            else:
+                self._paste_carry = combined[-(len(_PASTE_END_B) - 1):]
+            return "consumed"
+        if _PASTE_START_B in data:
+            self._in_paste = True
+            self._capture(data)
+            after = data.split(_PASTE_START_B, 1)[1]
+            if _PASTE_END_B in after:  # whole paste arrived in one read
+                self._in_paste = False
+                self._paste_carry = b""
+            else:
+                self._paste_carry = after[-(len(_PASTE_END_B) - 1):]
+            return "consumed"
+        action = _classify_stream_key_chunk(data)
+        if action == "expand":
+            return "expand"
+        if action == "interrupt":
+            return "interrupt"
+        # Any other bytes are instructions typed while the agent works —
+        # capture them for the loop to queue instead of discarding (G3).
+        self._capture(data)
+        return "consumed"
+
     def _read_loop(self) -> None:
         fd = sys.stdin.fileno()
         old_settings = None
@@ -694,19 +808,19 @@ class _EscInterruptMonitor:
                 data = os.read(fd, 32)
                 if not data:
                     return
-                action = _classify_stream_key_chunk(data)
+                action = self._dispatch_read(data)
                 if action == "expand":
                     self._trigger_expand()
                     continue
                 if action == "interrupt":
                     self._trigger()
                     return
-                # Any other bytes are instructions typed while the agent works —
-                # capture them for the loop to queue instead of discarding (G3).
-                self._capture(data)
+                # "consumed": typed-ahead text or paste bytes captured for the queue.
         except Exception:
             return
         finally:
+            self._in_paste = False
+            self._paste_carry = b""
             if old_settings is not None:
                 try:
                     termios.tcsetattr(fd, termios.TCSANOW, old_settings)
