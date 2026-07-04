@@ -243,11 +243,18 @@ instructions. The P0-5 type-ahead capture (`_EscInterruptMonitor` + `_parse_type
 wrong for one multi-line instruction. The **idle** submit path (`input_handler.get_input`,
 prompt_toolkit) is fine: multi-line = one message. So H reproduces only for a multi-line
 paste/type-ahead **during a turn**.
-- **Designed fix (M, needs live-terminal validation):** enable bracketed-paste mode
-  (`\x1b[?2004h`) in the monitor's cbreak session; make the capture/classify paste-aware so
-  `\x1b[200~…\x1b[201~` never trips the Esc-interrupt path; coalesce a paste block into **one**
-  instruction at drain. Design so absence of markers degrades to today's behaviour (no regression
-  to the P0-5 interrupt/type-ahead contract). **Status: OPEN — recommended next.**
+- **Fix (M) — IMPLEMENTED (2026-07-04):** enable bracketed-paste mode (`\x1b[?2004h`) while the
+  agent streams; a paste-aware `_dispatch_read` state machine treats `\x1b[200~…\x1b[201~` as
+  inert text (Ctrl-C still aborts even mid-paste; Ctrl-O/Esc keep precedence when *not* pasting);
+  `_parse_typeahead_lines` coalesces a paste block into **one** instruction while typed-ahead
+  lines still split (Example E). Absence of markers degrades to today's behaviour — no regression
+  to the P0-5 interrupt/type-ahead contract. 14 unit tests (`test_input_queue`), full suite 679
+  green. **Regression caught & fixed during the work:** enabling the mode from the reader *thread*
+  corrupted Rich's escape stream and broke the `streaming cancel` PTY smoke — the writes were
+  moved to the **main thread** (`start()`/`stop()`); smoke back to the baseline 4 known FAILs.
+  **Pending:** live-terminal paste validation (only a human paste into the running TUI can confirm
+  the terminal actually wraps the paste) — manual check: while a turn streams, paste a 3-line
+  message; it must queue as **one** "1 en file" instruction, not three.
 
 ### 7.4 **Example J** — confirmed already-HANDLED (not a discrepancy)
 
