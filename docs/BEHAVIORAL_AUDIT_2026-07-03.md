@@ -190,3 +190,86 @@ before the next (existing suites to extend named in *[brackets]*).
 **Sequencing:** P0-1 and P0-2 first (they clear the two seed examples and gap G1); P0-4 rides
 on P0-1's clean summary; P0-5 is independent (TUI). One bug → one green regression test →
 commit, before the next.
+
+---
+
+## 7. Verification delta (2026-07-04)
+
+> **Method:** re-ran the agent **live** (`./secops --print … --permission-mode always-proceed`,
+> effective model still auto-routed to Gemma — frequent transient `500`s observed), full suite
+> **662 green** + ruff clean, and code-traced the two brief examples the 2026-07-03 tables never
+> logged (**H, J**). One new discrepancy found and fixed (**D10**); H confirmed still-live; J
+> confirmed already-handled; D6 diagnosis deepened.
+
+### 7.1 Live re-verification of the landed P0 fixes — all hold
+
+| Item | Live `--print` result | Verdict |
+|---|---|---|
+| D1 VPN | `Oui, un VPN est actif (tunnel TUN…)` — no `(+N more line(s))` | ✅ P0-1 |
+| D2 heure France | `…CEST (France)` | ✅ P0-2 |
+| D4 IP publique | real public IP (not `192.168.…`) | ✅ P0-3 |
+| D1b outils | clean installed/missing list, no leak | ✅ P0-1/D9 |
+| D5 transient 500 | clean FR notice on **stdout**, raw banner on **stderr**, exit 1 | ✅ P0-4 |
+| D8 version sqlmap | `sqlmap n'est pas installé.` | ✅ |
+| target/scope | honest `Aucune cible… phase SCOPING` | ✅ |
+
+*False alarm cleared:* an apparent run-on `…instant.✗ Gemini API Error` was an artifact of a
+`2>&1` merge in the audit driver — `--print` correctly splits the clean notice (stdout) from the
+diagnostic banner (stderr). Not a bug.
+
+### 7.2 New finding — **D10** (FIXED): French disk-space query leaked the CPU line
+
+- **Input:** `combien d'espace disque disponible ?` → **Observed:** `CPU cores: 8`
+  (wrong field **and** raw-summary leak) · **Expected:** `Il reste 5.3 Go libres sur / …`.
+- **Root cause = RC-α + RC-β (the exact P0 class, on a phrasing §2 never tested).** No
+  disk matcher existed in the `LOCAL_SYSTEM` classifier (`request_context.py`) nor in
+  `preflight.local_answer`, so the query fell through to the LLM → `sysinfo` tool → its
+  parser summary's first line (`CPU cores: 8`, `tools/forensics.py:566`) leaked as the answer.
+  `_format_tool_answer_summary` has bespoke branches for `vpn_status`/`lab_setup_check`/
+  `nmap_scan`/`dir_brute` but **none for sysinfo**. Compounded by `prefers_french` missing
+  `combien`/`disque`/`disponible`, so even a correct answer came back in English.
+- **Fix (S):** disk markers → `LOCAL_SYSTEM` classifier; a deterministic `shutil.disk_usage("/")`
+  disk block in `local_answer` (FR/EN); three French tokens added to `prefers_french`.
+  **Verified live** FR + EN. *[test_local_system_answers.DiskSpaceAnswerTests — 662 green]*
+- **Residual (same RC-α class, follow-up):** other sysinfo phrasings (e.g. RAM/mémoire) can
+  still leak the first line if routed through a sysinfo preflight turn — a bespoke sysinfo
+  formatter branch (or per-resource `local_answer` blocks) would close the class.
+
+### 7.3 **Example H** — confirmed still-live (never logged in §4)
+
+A **single multi-line message pasted while the agent is streaming** is fragmented into several
+instructions. The P0-5 type-ahead capture (`_EscInterruptMonitor` + `_parse_typeahead_lines`,
+`renderer.py:599`) splits on `[\r\n]+` — correct for Example E (several distinct instructions),
+wrong for one multi-line instruction. The **idle** submit path (`input_handler.get_input`,
+prompt_toolkit) is fine: multi-line = one message. So H reproduces only for a multi-line
+paste/type-ahead **during a turn**.
+- **Designed fix (M, needs live-terminal validation):** enable bracketed-paste mode
+  (`\x1b[?2004h`) in the monitor's cbreak session; make the capture/classify paste-aware so
+  `\x1b[200~…\x1b[201~` never trips the Esc-interrupt path; coalesce a paste block into **one**
+  instruction at drain. Design so absence of markers degrades to today's behaviour (no regression
+  to the P0-5 interrupt/type-ahead contract). **Status: OPEN — recommended next.**
+
+### 7.4 **Example J** — confirmed already-HANDLED (not a discrepancy)
+
+Restart with a restored session calls `render_session_transcript` (`renderer.py:2904`, wired at
+`main.py:973`), a **static re-render** of stored messages — no thinking timers, no streaming
+animation, internal markers stripped. Exactly J's *expected* behaviour. Covered by
+`test_renderer_replays_loaded_session_transcript`. No live timer-replay reproduced.
+
+### 7.5 **D6 / P1-1** — deeper diagnosis: substantially a model-output quirk (stays deferred)
+
+The directive text in the run-on (`…RECONNAISSANCE.**Je n'ai pas d'action…`) is **not** a
+hardcoded suffix — it is LLM-generated (no such literal in `core/`). The renderer join at
+`renderer.py:3724` (`text_accumulator += event.content`) is **faithful**; the missing separator
+is in the model's own stream (Gemma opening a bold directive immediately after a period). A
+renderer-side separator heuristic would risk mangling legitimate mid-word stream chunks
+(`recon`+`naissance`). A source-side fix needs the exact emit turn captured live; the flaky tier
+prevented a clean capture this pass. **Deferral upheld.**
+
+### 7.6 Minor / by-design (no action)
+
+- **TUI transient-500 is coherent by design:** clean notice `TextEvent` + a compact `⚠ Gemini
+  API Error…` line (not a raw `✗` dump) — `test_agent_error_event_uses_same_compact_error_style`.
+- **Retry latency:** a first-call `500` can spin in backoff >90 s before the notice, with no
+  `--print` progress output (the TUI shows a spinner). Backoff working as intended; a `--print`
+  heartbeat or a lower retry ceiling would improve the headless UX. Observation, not a bug.
