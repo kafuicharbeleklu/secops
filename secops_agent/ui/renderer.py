@@ -582,6 +582,19 @@ def _compact_agent_error(message: str) -> str:
     return compact or "The model request failed."
 
 
+def _streaming_tail(text: str, viewport_height: int) -> str:
+    """Example F: return only the last N lines of streaming text so the transient
+    Live region never approaches the viewport height. A render taller than the
+    screen scrolls its top into scrollback that cursor-up cannot reach, so each
+    redraw restacks it (the 5-6x cascade). The complete answer is written once on
+    the done event by _flush_live_text, so nothing is lost by cropping the tail."""
+    limit = max(4, (viewport_height or 28) - 6)
+    lines = text.split("\n")
+    if len(lines) <= limit:
+        return text
+    return "\n".join(lines[-limit:])
+
+
 def _classify_stream_key_chunk(data: bytes) -> str:
     """Classify a raw stdin chunk read while the agent streams.
 
@@ -3646,6 +3659,13 @@ class Renderer:
                 (0, 0, 0, 2),
             )
 
+        def _live_tail(text: str) -> str:
+            try:
+                height = int(getattr(self.console.size, "height", 0) or 0)
+            except Exception:
+                height = 0
+            return _streaming_tail(text, height)
+
         def _advance_ctrl_o_tail(lines: int) -> None:
             nonlocal latest_tool_tail_lines
             if count_tail_after_latest_tool:
@@ -3785,7 +3805,10 @@ class Renderer:
                     console=self.console,
                     auto_refresh=False,
                     transient=True,
-                    vertical_overflow="visible",
+                    # Example F: cap the Live to the viewport. With "visible", a render
+                    # taller than the screen scrolls into scrollback that cursor-up
+                    # cannot reach, so each redraw restacks it (the 5-6x cascade).
+                    vertical_overflow="crop",
                 )
                 live_display.start()
 
@@ -3825,7 +3848,7 @@ class Renderer:
                             console=self.console,
                             auto_refresh=False,
                             transient=True,
-                            vertical_overflow="visible",
+                            vertical_overflow="crop",  # Example F: see note above
                         )
                         live_display.start()
                         last_render_time = time.monotonic()
@@ -3840,7 +3863,7 @@ class Renderer:
                         if live_display:
                             now = time.monotonic()
                             if (now - last_render_time) >= _RENDER_INTERVAL:
-                                live_display.update(_build_display(text_accumulator))
+                                live_display.update(_build_display(_live_tail(text_accumulator)))
                                 live_display.refresh()
                                 last_render_time = now
 
