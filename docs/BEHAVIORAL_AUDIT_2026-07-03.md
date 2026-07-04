@@ -287,6 +287,28 @@ prevented a clean capture this pass. **Deferral upheld.**
   `--print` progress output (the TUI shows a spinner). Backoff working as intended; a `--print`
   heartbeat or a lower retry ceiling would improve the headless UX. Observation, not a bug.
 
+### 7.8 **Example F** — streaming text duplication: FIXED (reproduced live by the user)
+
+The original §4 smoke used **short** content that fits the viewport, so it never reproduced
+F; a real mission (`donne moi mes informations système`) did — the ~44-line answer redrew from
+scratch **5–6×** as it streamed.
+- **Root cause (rendering):** the streaming `Live` re-renders the **full** accumulated markdown
+  every chunk (`_build_display(text_accumulator)` at the update site) with
+  `vertical_overflow="visible"`. Once the render exceeds the viewport, the terminal scrolls its
+  top into scrollback that **cursor-up cannot re-enter** (it clamps at the top visible row), so
+  each redraw **restacks** the buffer. Not the model, not cumulative-vs-delta emission (google-genai
+  streams deltas; the accumulation is correct) — purely the tall-content × Rich-`Live` interaction.
+- **Fix (S–M):** feed the streaming `Live` only the **last N lines** (`_streaming_tail`, N =
+  viewport−6) so the transient region never approaches the viewport, plus `vertical_overflow="crop"`
+  as a backstop; the complete answer is written **once** by `_flush_live_text` on `done`. Content
+  that fits the viewport is unchanged (the common case). Reproduced deterministically through a
+  28-row PTY + a bounded screen+scrollback emulator: **6 marker copies → 1**. *[unit:
+  test_streaming_overflow (_streaming_tail); e2e: scratch/repro_streaming_overflow.py (exit 0);
+  683 unit green; tui_smoke 30 PASS / 3 pre-existing FAIL — one fewer than baseline]*
+- **Secondary observations from the same session (not fixed):** the model chose `vpn_status` for a
+  bare "bonjour" (Gemma tool-selection quirk, not orchestration); and the collapsed VPN tool card
+  rendered twice — a lower-severity tool-card echo worth a separate look.
+
 ### 7.7 Leak-class sweep (deterministic, no LLM)
 
 Ran 22 FR/EN system phrasings through `classify_request` + `local_answer` and scanned for raw
