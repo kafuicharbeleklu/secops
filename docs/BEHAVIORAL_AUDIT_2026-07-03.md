@@ -286,3 +286,14 @@ prevented a clean capture this pass. **Deferral upheld.**
 - **Retry latency:** a first-call `500` can spin in backoff >90 s before the notice, with no
   `--print` progress output (the TUI shows a spinner). Backoff working as intended; a `--print`
   heartbeat or a lower retry ceiling would improve the headless UX. Observation, not a bug.
+
+### 7.7 Leak-class sweep (deterministic, no LLM)
+
+Ran 22 FR/EN system phrasings through `classify_request` + `local_answer` and scanned for raw
+markers (`CPU cores`, `── `, `(+`, `nproc`, `MemTotal`, `[Exit Code`). **Zero leaks** — every
+deterministic answer (CPU/disk/RAM/hostname/OS/kernel) is clean. The RC-α leak class is closed
+for the preflight path. Phrasings still classified `UNKNOWN` (uptime, default gateway, DNS,
+current user, CPU arch, network interfaces, "informations système") route to the **LLM**, which
+synthesises cleanly (D3/A4; Category-5 finding: synthesis never echoes the raw stream) — so these
+are **not** leaks, only *not-yet-deterministic* (a latency/robustness enhancement given the flaky
+tier, not a coherence bug). Deterministic coverage for them is optional future polish.
