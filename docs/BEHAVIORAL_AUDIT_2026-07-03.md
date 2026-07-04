@@ -231,9 +231,15 @@ diagnostic banner (stderr). Not a bug.
 - **Fix (S):** disk markers → `LOCAL_SYSTEM` classifier; a deterministic `shutil.disk_usage("/")`
   disk block in `local_answer` (FR/EN); three French tokens added to `prefers_french`.
   **Verified live** FR + EN. *[test_local_system_answers.DiskSpaceAnswerTests — 662 green]*
-- **Residual (same RC-α class, follow-up):** other sysinfo phrasings (e.g. RAM/mémoire) can
-  still leak the first line if routed through a sysinfo preflight turn — a bespoke sysinfo
-  formatter branch (or per-resource `local_answer` blocks) would close the class.
+- **Residual — RESOLVED (2026-07-04):** RAM/mémoire phrasings shared the exact D10 leak; fixed
+  the same way (classifier markers + a `read_meminfo()` `local_answer` block, FR/EN). The live
+  repro also exposed a **second RC-β site**: `SecOpsAgent._prefers_french` was a *separate* copy
+  missing `combien`, so a French `combien …` question got an **English** transient notice — the
+  two detectors are now **unified** (agent delegates to `preflight.prefers_french`).
+  *[test_local_system_answers.MemoryAnswerTests, TransientNoticeLanguageParityTests — 683 green]*
+  Any *further* sysinfo phrasing (uptime, kernel via a resource turn) would still benefit from a
+  bespoke sysinfo answer-formatter, but the common resource questions (CPU/disk/RAM) are now all
+  deterministic and leak-free.
 
 ### 7.3 **Example H** — confirmed still-live (never logged in §4)
 
