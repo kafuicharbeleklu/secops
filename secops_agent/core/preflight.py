@@ -60,6 +60,11 @@ def prefers_french(user_input: str) -> bool:
             "adresse ip",
             "c'est quoi",
             "explique",
+            # unambiguously French tokens (EN equivalents differ): "how much",
+            # "disk", "available" — extends francophone parity (RC-β / D10).
+            "combien",
+            "disque",
+            "disponible",
         )
     )
 
@@ -600,6 +605,46 @@ class PreflightRouter:
             return (
                 f"CPU load average (1/5/15 min): {one:.2f}, {five:.2f}, "
                 f"{fifteen:.2f} across {cores} core(s)."
+            )
+
+        if any(
+            marker in text
+            for marker in (
+                "espace disque",
+                "disque disponible",
+                "espace disponible",
+                "espace de stockage",
+                "stockage disponible",
+                "disk space",
+                "disk usage",
+                "disk free",
+                "free disk",
+                "free space",
+                "storage space",
+            )
+        ):
+            # D10: without this the disk question routed to `sysinfo` and leaked
+            # its first line ("CPU cores: 8") — wrong field + RC-α summary leak.
+            try:
+                usage = shutil.disk_usage("/")
+            except OSError:
+                return (
+                    "Je n'ai pas pu lire l'espace disque sur ce système."
+                    if french
+                    else "I could not read the disk usage on this system."
+                )
+            gib = 1024 ** 3
+            free_gb = usage.free / gib
+            total_gb = usage.total / gib
+            used_pct = (usage.used / usage.total * 100) if usage.total else 0.0
+            if french:
+                return (
+                    f"Il reste {free_gb:.1f} Go libres sur / "
+                    f"({used_pct:.0f} % utilisé, {total_gb:.1f} Go au total)."
+                )
+            return (
+                f"{free_gb:.1f} GB free on / "
+                f"({used_pct:.0f}% used, {total_gb:.1f} GB total)."
             )
 
         local_ip_intent = any(

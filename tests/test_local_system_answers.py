@@ -145,5 +145,47 @@ class CpuLoadAnswerTests(unittest.TestCase):
         self.assertRegex(answer, r"\d+\.\d{2}")
 
 
+class DiskSpaceAnswerTests(unittest.TestCase):
+    """D10 (2026-07-04 audit delta): 'combien d'espace disque disponible ?'
+    leaked a raw sysinfo line ('CPU cores: 8') — the wrong field *and* a
+    raw-summary leak (RC-α/RC-β: no French disk matcher, sysinfo has no bespoke
+    answer formatter). It must classify LOCAL_SYSTEM and return a deterministic
+    disk-space answer, never the CPU line."""
+
+    def setUp(self) -> None:
+        self.router = PreflightRouter(registry=ToolRegistry())
+
+    def _answer(self, prompt: str) -> str:
+        return self.router.local_answer(prompt, classify_request(prompt))
+
+    def test_disk_space_phrasings_classify_local(self) -> None:
+        for prompt in (
+            "combien d'espace disque disponible ?",
+            "quel espace disque me reste-t-il ?",
+            "how much disk space is left?",
+            "disk usage",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(
+                    classify_request(prompt).technical_goal, TechnicalGoal.LOCAL_SYSTEM
+                )
+
+    def test_disk_space_answer_reports_free_space_not_cpu(self) -> None:
+        answer = self._answer("combien d'espace disque disponible ?")
+        self.assertTrue(answer, "no deterministic disk-space answer")
+        # D10 regression: the raw sysinfo line must never leak as the answer.
+        self.assertNotIn("CPU cores", answer)
+        self.assertNotIn("(+", answer)  # no parser collapse trailer
+        # French answer, expressed in Go, with a figure.
+        self.assertIn("Go", answer)
+        self.assertRegex(answer, r"\d")
+
+    def test_disk_space_english_answer(self) -> None:
+        answer = self._answer("how much disk space is left?")
+        self.assertTrue(answer)
+        self.assertIn("GB", answer)
+        self.assertNotIn("CPU cores", answer)
+
+
 if __name__ == "__main__":
     unittest.main()
