@@ -851,6 +851,7 @@ async def _run_print_prompt(
     collected_text: list[str] = []
     collected_tools: list[dict[str, Any]] = []
     collected_actions: list[str] = []
+    collected_status: list[str] = []
     error_text: str | None = None
 
     async def consume() -> bool:
@@ -903,6 +904,15 @@ async def _run_print_prompt(
                         f"Permission denied in --print mode: {event.resource.value}",
                         err=True,
                     )
+            elif isinstance(event, StatusEvent):
+                # E2: surface retry/backoff progress so a transient-5xx storm is
+                # not a silent hang in headless mode. stdout stays the clean answer
+                # stream; the heartbeat goes to stderr (text) or the JSON record.
+                if json_mode:
+                    collected_status.append(event.message)
+                else:
+                    sys.stderr.write(f"… {event.message}\n")
+                    sys.stderr.flush()
             elif isinstance(event, ErrorEvent):
                 if json_mode:
                     error_text = str(event.error)
@@ -922,6 +932,7 @@ async def _run_print_prompt(
             "response": "".join(collected_text).strip(),
             "tools": collected_tools,
             "suggested_actions": collected_actions,
+            "status": collected_status,
             "error": error_text,
         }
         sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")

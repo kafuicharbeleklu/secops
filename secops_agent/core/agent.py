@@ -1698,6 +1698,7 @@ class SecOpsAgent:
 
             current_response_text = ""
             tool_calls_to_run = []
+            iteration_call_signatures: set[str] = set()
             archived_tool_marker_seen = False
             local_preflight_turn = iteration == 1 and bool(local_preflight_calls)
             defer_text_stream = guided_lab_restraint_turn and not local_preflight_turn
@@ -1796,6 +1797,18 @@ class SecOpsAgent:
                             if not defer_text_stream:
                                 yield TextEvent(content=notice)
                             continue
+
+                        # E5 (live re-audit 2026-07-04): some model tiers (Gemma)
+                        # emit the *same* tool call twice in one response. Running
+                        # it twice yields a duplicate result and a duplicate tool
+                        # card (the §7.8 "rendered twice"). Identical args ⇒ identical
+                        # result, so keep only the first occurrence this iteration.
+                        # (Keys in a dict are unique, so sorting never compares values.)
+                        signature = f"{tool_name}:{sorted(arguments.items())!r}"
+                        if signature in iteration_call_signatures:
+                            logger.debug("Skipping duplicate in-iteration tool call: %s", signature)
+                            continue
+                        iteration_call_signatures.add(signature)
 
                         unique_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
                         tc_with_id = type(tc)(

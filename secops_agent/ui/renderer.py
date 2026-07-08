@@ -197,6 +197,14 @@ def _build_collapsed_tool_result_lines(result: Any, *, width: int) -> list[str]:
     log_line = _tool_result_log_reference_line(result, max_width=width)
     if getattr(result, "success", False) and not text_failure:
         output = str(getattr(result, "output", "") or "")
+        # agy renders a successful command's output directly on the ⎿ line (e.g.
+        # `⎿ /home/user/project`). Our tools append a trailing "[Exit Code: 0]" line
+        # that would otherwise count as a second line and push single-line output
+        # into the metadata branch (`⎿ 30ms · 2 lines · …`). Drop that trailer for
+        # the collapsed summary only; a non-zero exit code stays (it is diagnostic).
+        _out_lines = output.splitlines()
+        if _out_lines and _out_lines[-1].strip() == "[Exit Code: 0]":
+            output = "\n".join(_out_lines[:-1])
         summary = summarize_output(
             output,
             max_lines=4,
@@ -3470,8 +3478,8 @@ class Renderer:
 
         self.console.print()
 
-        # agy format: "▸ Thought for Xs" with a brief content preview.
-        # (Real Antigravity transcripts render e.g. "▸ Thought for 2s … <summary>".)
+        # agy renders the collapsed thought as "▸ Thought for Xs" then its content on
+        # the next indented line (verified against live agy 2026-07-05), not inline.
         self.console.print(
             f"[{COLORS['accent']}]▸[/{COLORS['accent']}] "
             f"[{COLORS['text_muted']}]Thought for {duration}s[/{COLORS['text_muted']}]"

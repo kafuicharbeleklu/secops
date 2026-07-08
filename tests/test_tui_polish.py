@@ -3655,5 +3655,43 @@ class StartThinkingDefensiveStopTests(unittest.TestCase):
         self.assertTrue(second.started)
 
 
+class CollapsedToolCardExitCodeTests(unittest.TestCase):
+    """P2-A (live agy diff 2026-07-05): agy renders a successful command's output
+    directly on the ⎿ line (e.g. `⎿ /home/user/project`). Our tools append a
+    trailing '[Exit Code: 0]' line that pushed single-line output into the metadata
+    branch (`⎿ 30ms · 2 lines · …`). The collapsed summary must drop the zero-exit
+    trailer so single-line output matches agy; a non-zero code stays diagnostic."""
+
+    @staticmethod
+    def _plain(result) -> list[str]:
+        import re
+
+        from secops_agent.ui.renderer import _build_collapsed_tool_result_lines
+
+        return [
+            re.sub(r"\[/?[a-z0-9_# ]+\]", "", line)
+            for line in _build_collapsed_tool_result_lines(result, width=100)
+        ]
+
+    def test_single_line_success_shows_output_on_lima_line(self) -> None:
+        from secops_agent.core.tools import ToolResult
+
+        lines = self._plain(
+            ToolResult(success=True, output="/home/user/project\n[Exit Code: 0]", execution_time=0.03)
+        )
+        self.assertEqual(len(lines), 1, f"expected one ⎿ line, got {lines!r}")
+        self.assertIn("⎿  /home/user/project", lines[0])
+        self.assertNotIn("chars", lines[0])          # not the metadata branch
+        self.assertNotIn("Exit Code", lines[0])       # zero-exit trailer dropped
+
+    def test_nonzero_exit_code_is_preserved(self) -> None:
+        from secops_agent.core.tools import ToolResult
+
+        joined = "\n".join(
+            self._plain(ToolResult(success=True, output="boom\n[Exit Code: 1]", execution_time=0.03))
+        )
+        self.assertIn("[Exit Code: 1]", joined)
+
+
 if __name__ == "__main__":
     unittest.main()

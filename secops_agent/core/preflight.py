@@ -45,28 +45,40 @@ def plain_text(user_input: str) -> str:
     return " ".join(text.split())
 
 
+# High-precision French markers. Each is either an unambiguously French token
+# or a construction whose accent-stripped form still differs from its English
+# equivalent, so an English prompt is (almost) never tagged French. The text is
+# space-padded before matching so sentence-initial pronouns (" je ", " mon ")
+# and space-guarded tokens (" cible", to avoid "forcible"/"invincible") match.
+# Deliberately conservative — see test_prefers_french_covers_common_constructions.
+_FRENCH_MARKERS: tuple[str, ...] = (
+    # question words
+    "quelle", "quel ", "quels", "quelles", "combien", "pourquoi",
+    "est-ce", "qu'est", "quoi", "aujourd'hui",
+    # imperatives / verbs
+    "donne", "montre", "affiche", "explique", "verifie", "dis-moi", "dis moi",
+    "peux-tu", "peux tu", "pouvez", "trouve", "cherche",
+    # elision forms (very high precision)
+    "c'est", "s'il", "n'est", "d'un", "j'ai", "qu'il", "qu'on",
+    # pronouns (space-padded so sentence-initial forms match)
+    " je ", " nous ", " vous ", " mon ", " mes ", " ma ", " nos ", " notre ",
+    "sommes",
+    # nouns whose accent-stripped form differs from the English equivalent
+    "heure", "reseau", "memoire", "systeme", "disque", "disponible", " cible",
+    "outils", "passerelle", "utilisateur", "espace", "etape", "prochaine",
+    "installes", "adresse ip",
+)
+
+
 def prefers_french(user_input: str) -> bool:
-    """Heuristic: return True when the prompt appears to be in French."""
-    text = plain_text(user_input)
-    return any(
-        marker in text
-        for marker in (
-            "quelle",
-            "quel ",
-            "quels ",
-            "quelles ",
-            "mon systeme",
-            "mon système",
-            "adresse ip",
-            "c'est quoi",
-            "explique",
-            # unambiguously French tokens (EN equivalents differ): "how much",
-            # "disk", "available" — extends francophone parity (RC-β / D10).
-            "combien",
-            "disque",
-            "disponible",
-        )
-    )
+    """Heuristic: return True when the prompt appears to be in French.
+
+    Gates the language of deterministic answers *and* the transient-error notice
+    (E4 / RC-β), so it must recognise common French constructions — not just a
+    handful of keywords — without ever tagging an English prompt as French.
+    """
+    text = f" {plain_text(user_input)} "
+    return any(marker in text for marker in _FRENCH_MARKERS)
 
 
 def _format_local_stamp(dt: Any, french: bool) -> str:
@@ -136,6 +148,67 @@ def local_ip_addresses() -> list[str]:
         except OSError:
             pass
     return addresses
+
+
+def current_user() -> str:
+    """Best-effort current login name (E3: deterministic local fact)."""
+    try:
+        import getpass
+
+        return getpass.getuser()
+    except Exception:
+        return os.environ.get("USER") or os.environ.get("LOGNAME") or "?"
+
+
+def system_uptime_seconds() -> float | None:
+    """Seconds since boot from /proc/uptime, or None if unavailable."""
+    try:
+        return float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _format_uptime(seconds: float, french: bool) -> str:
+    total = max(0, int(seconds))
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    unit_days, unit_hours, unit_min = ("j", "h", "min") if french else ("d", "h", "m")
+    bits: list[str] = []
+    if days:
+        bits.append(f"{days} {unit_days}" if french else f"{days}{unit_days}")
+    if hours:
+        bits.append(f"{hours} {unit_hours}" if french else f"{hours}{unit_hours}")
+    bits.append(f"{minutes} {unit_min}" if french else f"{minutes}{unit_min}")
+    return " ".join(bits)
+
+
+def default_route() -> tuple[str, str] | None:
+    """Return (gateway, interface) for the IPv4 default route, or None.
+
+    Parses ``ip route show default`` (e.g. ``default via 192.168.1.1 dev wlan0``).
+    """
+    try:
+        completed = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in completed.stdout.splitlines():
+        parts = line.split()
+        gateway = interface = ""
+        for index, token in enumerate(parts):
+            if token == "via" and index + 1 < len(parts):
+                gateway = parts[index + 1]
+            elif token == "dev" and index + 1 < len(parts):
+                interface = parts[index + 1]
+        if gateway or interface:
+            return gateway or "?", interface or "?"
+    return None
 
 
 # Public-IP echo services, tried in order. Read-only egress; the caller gates it.
@@ -306,6 +379,13 @@ _CITY_TIMEZONES: dict[str, str] = {
     "japan": "Asia/Tokyo",
     "royaume-uni": "Europe/London",
     "angleterre": "Europe/London",
+    "uk": "Europe/London",
+    "united kingdom": "Europe/London",
+    "great britain": "Europe/London",
+    "britain": "Europe/London",
+    "england": "Europe/London",
+    "scotland": "Europe/London",
+    "wales": "Europe/London",
     "allemagne": "Europe/Berlin",
     "germany": "Europe/Berlin",
     "espagne": "Europe/Madrid",
@@ -315,7 +395,15 @@ _CITY_TIMEZONES: dict[str, str] = {
     "etats-unis": "America/New_York",
     "united states": "America/New_York",
     "usa": "America/New_York",
+    "us": "America/New_York",
+    "america": "America/New_York",
+    "mexico": "America/Mexico_City",
+    "mexique": "America/Mexico_City",
     "canada": "America/Toronto",
+    "netherlands": "Europe/Amsterdam",
+    "pays-bas": "Europe/Amsterdam",
+    "hollande": "Europe/Amsterdam",
+    "amsterdam": "Europe/Amsterdam",
     "australie": "Australia/Sydney",
     "australia": "Australia/Sydney",
     "chine": "Asia/Shanghai",
@@ -331,7 +419,7 @@ _CITY_TIMEZONES: dict[str, str] = {
 }
 
 # Keys whose natural label is an acronym (uppercased, not title-cased).
-_ACRONYM_ZONE_KEYS: frozenset[str] = frozenset({"utc", "gmt", "usa"})
+_ACRONYM_ZONE_KEYS: frozenset[str] = frozenset({"utc", "gmt", "usa", "us", "uk"})
 
 
 def resolve_requested_timezone(user_input: str) -> tuple[Any, str]:
@@ -772,7 +860,83 @@ class PreflightRouter:
             joined = ", ".join(addresses)
             return f"Vos adresses IP locales sont: {joined}." if french else f"Local IP addresses: {joined}."
 
-        if "hostname" in text:
+        if any(
+            marker in text
+            for marker in (
+                "current user", "whoami", "who am i", "logged in as", "which user",
+                "utilisateur courant", "utilisateur actuel", "quel utilisateur",
+            )
+        ):
+            user = current_user()
+            return (
+                f"L'utilisateur courant est {user}."
+                if french
+                else f"The current user is {user}."
+            )
+
+        if any(
+            marker in text
+            for marker in (
+                "uptime", "temps de fonctionnement", "depuis combien de temps",
+                "depuis quand", "how long has the machine", "how long has the system",
+                "how long has this machine", "how long has it been",
+            )
+        ):
+            seconds = system_uptime_seconds()
+            if seconds is None:
+                return (
+                    "Je n'ai pas pu lire la durée de fonctionnement du système."
+                    if french
+                    else "I could not read the system uptime."
+                )
+            human = _format_uptime(seconds, french)
+            return (
+                f"Le système fonctionne depuis {human}."
+                if french
+                else f"The system has been up for {human}."
+            )
+
+        gateway_intent = any(
+            marker in text
+            for marker in (
+                "default gateway", "passerelle par defaut", "quelle passerelle",
+                "ma passerelle", "gateway par defaut",
+            )
+        )
+        interface_intent = any(
+            marker in text
+            for marker in (
+                "network interface", "active interface", "which network interface",
+                "active network interface", "interface reseau", "quelle interface",
+            )
+        )
+        if gateway_intent or interface_intent:
+            route = default_route()
+            if route is None:
+                return (
+                    "Je n'ai pas pu déterminer la route par défaut."
+                    if french
+                    else "I could not determine the default route."
+                )
+            gateway, interface = route
+            if gateway_intent and not interface_intent:
+                return (
+                    f"La passerelle par défaut est {gateway} (via l'interface {interface})."
+                    if french
+                    else f"The default gateway is {gateway} (via interface {interface})."
+                )
+            return (
+                f"L'interface réseau active est {interface} (passerelle {gateway})."
+                if french
+                else f"The active network interface is {interface} (gateway {gateway})."
+            )
+
+        if (
+            "hostname" in text
+            or "nom d'hote" in text
+            or "nom de la machine" in text
+            or "nom de machine" in text
+        ):
             hostname = socket.gethostname()
             return f"Le nom d'hôte est {hostname}." if french else f"The hostname is {hostname}."
 

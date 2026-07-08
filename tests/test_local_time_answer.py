@@ -93,6 +93,48 @@ class TimezoneAnswerTests(unittest.TestCase):
                 self.assertEqual(str(zone), iana)
                 self.assertEqual(label, label_expected)
 
+    def test_resolve_country_family_coverage(self) -> None:
+        """E1 (live re-audit 2026-07-04): the two most common English names for
+        the UK and the US ("UK", "US", "United Kingdom", "England", "Britain",
+        "America") fell through to the host timezone. The fix is family-level:
+        every common EN/FR country name/abbreviation must resolve, not just the
+        one reported. This closes the whole time/timezone family."""
+        from secops_agent.core.preflight import resolve_requested_timezone
+
+        cases = [
+            # United Kingdom family
+            ("what time is it in the UK?", "Europe/London"),
+            ("what time is it in the United Kingdom?", "Europe/London"),
+            ("what time is it in England?", "Europe/London"),
+            ("what time is it in Britain?", "Europe/London"),
+            ("what time is it in Great Britain?", "Europe/London"),
+            # United States family
+            ("what time is it in the US?", "America/New_York"),
+            ("what time is it in the USA?", "America/New_York"),
+            ("what time is it in the United States?", "America/New_York"),
+            ("what time is it in America?", "America/New_York"),
+            # neighbours added for family completeness
+            ("what time is it in Mexico?", "America/Mexico_City"),
+            ("quelle heure est-il au Mexique ?", "America/Mexico_City"),
+            ("what time is it in the Netherlands?", "Europe/Amsterdam"),
+            # guards: existing coverage must not regress
+            ("what time is it in Germany?", "Europe/Berlin"),
+            ("quelle heure au Royaume-Uni ?", "Europe/London"),
+        ]
+        for prompt, iana in cases:
+            with self.subTest(prompt=prompt):
+                zone, label = resolve_requested_timezone(prompt)
+                self.assertIsNotNone(zone, f"no zone resolved for {prompt!r}")
+                self.assertEqual(str(zone), iana, f"{prompt!r} -> {zone}")
+                self.assertTrue(label, f"empty label for {prompt!r}")
+
+    def test_uk_time_answer_uses_london_zone_not_host(self) -> None:
+        """E1 end-to-end: 'in the UK' must render Europe/London (GMT/BST),
+        proving it no longer falls back to the host clock."""
+        answer = self._answer("what time is it in the UK?")
+        self.assertTrue("GMT" in answer or "BST" in answer, answer)
+        self.assertNotIn("The current system time is", answer)
+
     def test_france_time_answer_renders_paris_zone(self) -> None:
         answer = self._answer("quelle heure est-il en France ?")
         self.assertIn("France", answer)

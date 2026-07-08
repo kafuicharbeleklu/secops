@@ -158,5 +158,53 @@ class StructuredTracerTests(unittest.TestCase):
         self.assertEqual(event["nested"]["target"], "10.10.10.5")
 
 
+class PrintModeRetryHeartbeatTests(unittest.IsolatedAsyncioTestCase):
+    """E2 (live re-audit 2026-07-04): a transient-5xx storm made `--print` hang
+    silently because the consumer dropped every StatusEvent — the retry/backoff
+    produced no output until success or final error. The retry itself is correct
+    (covered above); this proves the *headless* surface now shows progress."""
+
+    def _agent(self) -> SecOpsAgent:
+        return SecOpsAgent(
+            llm=ErrorThenTextLLM("Gemini API Error: 500 INTERNAL", final_text="ok"),
+            registry=ToolRegistry(),
+            memory=ConversationMemory(),
+            llm_retry_base_seconds=0,
+        )
+
+    async def test_text_mode_writes_retry_heartbeat_to_stderr(self) -> None:
+        import contextlib
+        import io
+
+        from secops_agent.main import _run_print_prompt
+        from secops_agent.ui.runtime import RuntimeState
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            await _run_print_prompt(self._agent(), RuntimeState(), "hello", 30.0, "text")
+        self.assertIn("retrying", err.getvalue(), "retry heartbeat missing from stderr")
+        self.assertIn("ok", out.getvalue())          # stdout is still the clean answer
+        self.assertNotIn("retrying", out.getvalue())  # progress never pollutes stdout
+
+    async def test_json_mode_records_status_stream(self) -> None:
+        import contextlib
+        import io
+        import json as _json
+
+        from secops_agent.main import _run_print_prompt
+        from secops_agent.ui.runtime import RuntimeState
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            await _run_print_prompt(self._agent(), RuntimeState(), "hello", 30.0, "json")
+        payload = _json.loads(out.getvalue())
+        self.assertIn("status", payload)
+        self.assertTrue(
+            any("retrying" in message for message in payload["status"]),
+            f"no retry status recorded: {payload['status']!r}",
+        )
+        self.assertIn("ok", payload["response"])
+
+
 if __name__ == "__main__":
     unittest.main()

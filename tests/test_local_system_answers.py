@@ -242,6 +242,98 @@ class TransientNoticeLanguageParityTests(unittest.TestCase):
         self.assertTrue(SecOpsAgent._prefers_french("quelle heure est-il ?"))
         self.assertFalse(SecOpsAgent._prefers_french("how much RAM is available?"))
 
+    def test_prefers_french_covers_common_constructions(self) -> None:
+        """E4 (live re-audit 2026-07-04): a French prompt got an ENGLISH transient
+        notice because prefers_french only knew a few keywords. It missed the most
+        common French forms ('est-ce que', 'donne moi', 'peux-tu'…). Fix is
+        family-level: cover the constructions, not the one reported phrase — while
+        never tagging an English prompt as French."""
+        from secops_agent.core.preflight import prefers_french
+
+        french = [
+            "est-ce que le VPN est actif ?",
+            "donne moi mes informations systeme",
+            "donne-moi les informations système",
+            "peux-tu scanner la cible ?",
+            "montre-moi l'adresse IP",
+            "quelle est la prochaine étape ?",
+            "dans quelle phase de mission sommes-nous ?",
+            "quel est l'utilisateur courant ?",
+            "quelle est la passerelle par défaut ?",
+            "trouve les outils installés",
+            "c'est quoi le réseau actif ?",
+        ]
+        english = [
+            "how much RAM is available?",
+            "what is my public IP address?",
+            "which offensive tools are installed?",
+            "run an nmap scan against the target",
+            "show me the default gateway",
+            "comment out this line and rerun",  # 'comment' must NOT read as French
+            "balance the load across hosts",     # 'lance'/'balance' must NOT match
+        ]
+        for prompt in french:
+            with self.subTest(fr=prompt):
+                self.assertTrue(prefers_french(prompt), f"should be FR: {prompt!r}")
+        for prompt in english:
+            with self.subTest(en=prompt):
+                self.assertFalse(prefers_french(prompt), f"should be EN: {prompt!r}")
+
+
+class LocalFactRoutingTests(unittest.TestCase):
+    """E3 (live re-audit 2026-07-04): local facts (current user, uptime, active
+    interface, default gateway, French hostname) were routed to the flaky LLM and
+    failed ~25% of the time with a 45s+ hang. They are all local facts and must be
+    answered deterministically. Family-level: every fact + both languages, not the
+    one reported. Each answer must be non-empty, in the right language, leak-free."""
+
+    _LEAK = ("(+", "CPU cores:", "── ", "[Exit Code", "MemTotal", "nproc")
+
+    def setUp(self) -> None:
+        self.router = PreflightRouter(registry=ToolRegistry())
+
+    def _answer(self, prompt: str) -> str:
+        return self.router.local_answer(prompt, classify_request(prompt))
+
+    def test_local_facts_classify_as_local_system(self) -> None:
+        prompts = [
+            "who is the current user?", "whoami",
+            "quel est l'utilisateur courant ?",
+            "what is the system uptime?", "depuis combien de temps la machine tourne ?",
+            "what is the active network interface?",
+            "quelle est l'interface réseau active ?",
+            "what is the default gateway?",
+            "quelle est la passerelle par défaut ?",
+            "quel est le nom d'hôte ?",
+        ]
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                self.assertEqual(
+                    classify_request(prompt).technical_goal,
+                    TechnicalGoal.LOCAL_SYSTEM,
+                    f"not LOCAL_SYSTEM: {prompt!r}",
+                )
+
+    def test_local_facts_answered_deterministically(self) -> None:
+        checks = [
+            ("who is the current user?", "current user"),
+            ("quel est l'utilisateur courant ?", "utilisateur"),
+            ("what is the system uptime?", "up for"),
+            ("depuis combien de temps la machine tourne ?", "fonctionne"),
+            ("what is the active network interface?", "interface"),
+            ("quelle est l'interface réseau active ?", "interface"),
+            ("what is the default gateway?", "gateway"),
+            ("quelle est la passerelle par défaut ?", "passerelle"),
+            ("quel est le nom d'hôte ?", "hôte"),
+        ]
+        for prompt, needle in checks:
+            with self.subTest(prompt=prompt):
+                answer = self._answer(prompt)
+                self.assertTrue(answer, f"empty deterministic answer for {prompt!r}")
+                self.assertIn(needle, answer, f"{prompt!r} -> {answer!r}")
+                for leak in self._LEAK:
+                    self.assertNotIn(leak, answer, f"leak {leak!r} in {answer!r}")
+
 
 if __name__ == "__main__":
     unittest.main()

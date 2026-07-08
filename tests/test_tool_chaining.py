@@ -187,6 +187,38 @@ class ToolChainingTests(unittest.IsolatedAsyncioTestCase):
         )
         return agent, executed, llm
 
+    async def test_duplicate_in_iteration_tool_call_runs_once(self):
+        """E5 (live re-audit 2026-07-04, audit §7.8 'VPN card rendered twice'):
+        some model tiers emit the *same* tool call twice in one response. The loop
+        must execute it once and surface one result/card, not two."""
+        agent, executed, _ = self._proposal_agent()
+
+        class DoubleNmapLLM(ChainFakeLLM):
+            async def stream_chat(self, messages, tools_schema=None):
+                self.calls += 1
+                if self.calls == 1:
+                    call = ToolCallChunk(
+                        name="nmap_scan",
+                        arguments={"target": "10.10.10.5"},
+                        id="dup",
+                    )
+                    yield StreamChunk(tool_call=call)
+                    yield StreamChunk(tool_call=call)  # identical, same response
+                    return
+                yield StreamChunk(content="done")
+
+        agent.llm = DoubleNmapLLM()
+        events = await _collect_events(agent, "enumerate 10.10.10.5")
+        results = [
+            event for event in events
+            if isinstance(event, ToolResultEvent) and event.name == "nmap_scan"
+        ]
+        self.assertEqual(
+            executed.count("nmap_scan"), 1,
+            f"nmap_scan executed {executed.count('nmap_scan')}x (expected 1)",
+        )
+        self.assertEqual(len(results), 1, "duplicate tool result event / card")
+
     async def test_planner_candidates_are_not_executed_by_default(self):
         executed: list[str] = []
         registry = ToolRegistry()
