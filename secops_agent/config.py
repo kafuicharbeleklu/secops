@@ -40,4 +40,20 @@ class Config:
             path.mkdir(parents=True, exist_ok=True)
             return path
 
+    @property
+    def workspace_dir(self) -> Path:
+        """Base directory for relative payload/file writes (write_file), kept out
+        of the operator's current directory so offensive artifacts never land in
+        their project/repo. Override with SECOPS_WORKSPACE_DIR."""
+        env = os.getenv("SECOPS_WORKSPACE_DIR", "").strip()
+        try:
+            path = Path(env).expanduser() if env else Path.home() / ".secops_agent" / "workspace"
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        except OSError:
+            path = Path("./.secops_workspace")
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+
+
 settings = Config()
