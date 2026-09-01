@@ -402,6 +402,18 @@ class SecOpsAgent:
         return 1
 
     @staticmethod
+    def _rank_dir_candidates(paths: list[str]) -> list[str]:
+        """Deterministic ranking of discovered web paths: likely attack surface
+        first, ties broken alphabetically so the top candidate is stable
+        regardless of gobuster's threaded (non-deterministic) output order."""
+        unique: list[str] = []
+        for path in paths:
+            candidate = str(path or "").strip()
+            if candidate and candidate not in unique:
+                unique.append(candidate)
+        return sorted(unique, key=lambda path: (-SecOpsAgent._dir_candidate_score(path), path))
+
+    @staticmethod
     def _strip_mission_state_sections(text: str) -> str:
         """Remove noisy mission summaries from focused answer turns."""
         lines = str(text or "").splitlines()
@@ -1469,9 +1481,7 @@ class SecOpsAgent:
                     if path and path not in interesting_paths:
                         interesting_paths.append(path)
             if interesting_paths:
-                ranked = sorted(
-                    interesting_paths[:8], key=self._dir_candidate_score, reverse=True
-                )
+                ranked = self._rank_dir_candidates(interesting_paths)
                 lines.append(
                     "2. Candidat(s) hidden directory: "
                     + ", ".join(f"`{path}`" for path in ranked[:5])
