@@ -82,6 +82,7 @@ _HELP_SHORTCUTS = (
     ("pgdn, shift+down", "Page down"),
     ("pgup, shift+up", "Page up"),
     ("right, tab", "Switch help tab right"),
+    ("shift+tab", "Cycle permission mode"),
     ("tab", "Complete highlighted slash command"),
     ("up", "Move up"),
     ("?", "Open this help"),
