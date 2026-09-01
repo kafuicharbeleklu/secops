@@ -967,6 +967,7 @@ async def _render_interactive_turn(
         queued = await renderer.render_agent_stream(
             event_stream,
             status_right=_status_right(agent, runtime),
+            mission_phase=agent.current_phase(),
             memory=agent.memory,
             runtime=runtime,
         )

@@ -43,7 +43,7 @@ from rich.padding import Padding
 from secops_agent import __version__
 from secops_agent.ui.theme import rich_theme, COLORS, friendly_model_name, reduced_motion
 from secops_agent.ui.commands import iter_commands
-from secops_agent.ui.animations import ThinkingSpinner, ToolExecutionSpinner
+from secops_agent.ui.animations import ThinkingSpinner, ToolExecutionSpinner, thinking_label_for_phase
 from secops_agent.ui.overlay import OverlayRow, build_choice_overlay_lines, read_terminal_key, render_overlay
 from secops_agent.ui.panel import PanelRow, choose_panel
 from secops_agent.ui.runtime import RuntimeState
@@ -3512,7 +3512,7 @@ class Renderer:
 
     # ── Thinking Display ──────────────────────────────────────────────
 
-    def _start_thinking(self, status_right: str = ""):
+    def _start_thinking(self, status_right: str = "", mission_phase: str = ""):
         """Record thinking start time."""
         # Defensively stop a spinner still running from a prior thinking phase so
         # two Live displays never stack (mirrors _start_tool_feedback → R2 latent).
@@ -3523,7 +3523,7 @@ class Renderer:
         self._thinking_start = time.monotonic()
         self._thinking_content = ""
         self._thinking_spinner = ThinkingSpinner(
-            "Generating...",
+            thinking_label_for_phase(mission_phase),
             console=self.console,
             status_right=status_right,
         )
@@ -3720,6 +3720,7 @@ class Renderer:
         self,
         event_stream: AsyncIterator[AgentEvent],
         status_right: str = "",
+        mission_phase: str = "",
         *,
         memory: Any | None = None,
         runtime: RuntimeState | None = None,
@@ -3889,7 +3890,7 @@ class Renderer:
 
             if thinking_was_active and is_thinking and self._thinking_start is not None:
                 self._thinking_spinner = ThinkingSpinner(
-                    "Generating...",
+                    thinking_label_for_phase(mission_phase),
                     console=self.console,
                     status_right=status_right,
                 )
@@ -3927,7 +3928,7 @@ class Renderer:
                 elif isinstance(event, ThinkingEvent):
                     if not is_thinking:
                         is_thinking = True
-                        self._start_thinking(status_right=status_right)
+                        self._start_thinking(status_right=status_right, mission_phase=mission_phase)
 
                     # Accumulate thinking content
                     if event.content and event.content != "Thinking...":

@@ -149,6 +149,24 @@ def _spinner_refresh() -> int:
     return 2 if reduced_motion() else 12
 
 
+_PHASE_LABELS = {
+    "scoping": "Scoping the mission",
+    "recon": "Running reconnaissance",
+    "enumeration": "Enumerating the target",
+    "vulnerability": "Assessing vulnerabilities",
+    "exploitation": "Working the exploit path",
+    "post_exploitation": "Post-exploitation",
+    "reporting": "Compiling the report",
+}
+
+
+def thinking_label_for_phase(phase: str) -> str:
+    """ANIM-04: a semantic 'what the agent is doing' label from the mission
+    phase, falling back to a generic label when no mission is active.  Derived
+    from the controlled phase enum only - never raw model reasoning (ASI01)."""
+    return _PHASE_LABELS.get(str(phase or "").strip().lower(), "Generating")
+
+
 class ThinkingSpinner:
     """Simple 'Thinking...' spinner matching Antigravity CLI exactly."""
 
