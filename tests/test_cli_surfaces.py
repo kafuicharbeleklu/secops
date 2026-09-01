@@ -425,6 +425,20 @@ class CliSurfaceTests(unittest.TestCase):
             )
         )
 
+    def test_bare_theme_opens_the_interactive_picker(self):
+        # Bare /theme on a TTY opens the live picker (like Claude Code), while
+        # /theme <name> applies directly without the overlay.
+        self.assertTrue(
+            should_use_interactive_surface(
+                "/theme", "", stdin_isatty=True, stdout_isatty=True
+            )
+        )
+        self.assertFalse(
+            should_use_interactive_surface(
+                "/theme", "neon", stdin_isatty=True, stdout_isatty=True
+            )
+        )
+
     def test_main_keeps_run_chat_loop_compatibility_export(self):
         self.assertTrue(callable(run_chat_loop))
 

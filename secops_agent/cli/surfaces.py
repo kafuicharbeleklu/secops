@@ -17,6 +17,7 @@ INTERACTIVE_SURFACE_COMMANDS = frozenset({
     "/permissions",
     "/resume",
     "/skills",
+    "/theme",
     "/tool",
     "/tools",
 })
