@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from rich.markup import escape
+
 # Human review decisions an operator can apply to a lesson. "unreviewed" is the
 # initial state, never a promotion target.
 VALID_REVIEW_STATUSES: tuple[str, ...] = ("reviewed", "blocked", "deprecated")
@@ -78,7 +80,7 @@ def format_lessons_for_review(lessons: Iterable[Any], *, limit: int = 30) -> str
         label = _lesson_label(lesson)
         if len(label) > 90:
             label = label[:87] + "…"
-        lines.append(f"  [{lesson_id}] ({status}) {label}")
+        lines.append(escape(f"  [{lesson_id}] ({status}) {label}"))
     if len(items) > limit:
         lines.append(f"  … and {len(items) - limit} more.")
     lines.append("Promote with: /lessons review <id> <reviewed|blocked|deprecated> [note]")
@@ -117,7 +119,7 @@ def format_end_of_mission_review(
         label = _lesson_label(lesson)
         if len(label) > 90:
             label = label[:87] + "…"
-        lines.append(f"  [{lesson_id}] {label}")
+        lines.append(escape(f"  [{lesson_id}] {label}"))
     if count > limit:
         lines.append(f"  … and {count - limit} more.")
     lines.append("Validate with: /lessons review <id> <reviewed|blocked|deprecated> [note]")

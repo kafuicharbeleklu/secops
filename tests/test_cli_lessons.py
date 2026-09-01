@@ -104,6 +104,14 @@ class EndOfMissionReviewTests(unittest.TestCase):
     def test_no_pending_returns_empty(self):
         self.assertEqual(format_end_of_mission_review([], session_name="m1"), "")
 
+    def test_lesson_lines_escape_brackets_so_rich_shows_the_id(self):
+        # Rich markup would otherwise eat an id that looks like a tag (hex ids
+        # starting with a-f); the id column must be escaped to render literally.
+        a = CaseLesson(title="x", outcome="success", review_status="unreviewed",
+                       session_name="m1", id="abcdef012345")
+        out = format_end_of_mission_review([a], session_name="m1")
+        self.assertIn("\\[abcdef012345]", out)
+
 
 if __name__ == "__main__":
     unittest.main()
