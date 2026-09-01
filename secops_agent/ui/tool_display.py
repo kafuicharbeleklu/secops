@@ -194,6 +194,57 @@ def _is_passive_tool(tool_name: str) -> bool:
     return False
 
 
+def _tool_risk_badge(tool_name: str) -> str:
+    """Return a compact, always-visible risk class for transcript rows.
+
+    Approval dialogs already show a verbose risk label, but the normal stream is
+    where an operator scans many actions quickly.  Resolve against the live
+    registry so dynamically registered MCP tools retain their r7 distinction.
+    """
+    try:
+        tool_def = tool_registry.get_tool(tool_name)
+        risk_class = getattr(tool_def, "risk_class", None) if tool_def else None
+        value = str(getattr(risk_class, "value", risk_class) or "")
+        match = re.match(r"r([0-8])_", value)
+        if match:
+            return f"R{match.group(1)}"
+    except Exception:
+        pass
+    return "R?"
+
+
+# ── FMT-01: severity-tiered risk badge colour ───────────────────
+# The R0-R8 badge is rendered on every transcript row; colour it by tier so a
+# destructive action (R6-R8) is not visually identical to a passive observation
+# (R0-R2). The ramp stays inside the theme's "colour austerity": quiet grey for
+# passive tiers, amber for active/privileged, red for offensive/remote.
+_RISK_BADGE_COLOR_KEY = {
+    0: "text_dim",
+    1: "text_dim",
+    2: "text_muted",
+    3: "warning",
+    4: "warning",
+    5: "warning",
+    6: "danger",
+    7: "danger",
+    8: "danger_bright",
+}
+
+
+def _risk_badge_markup(tool_name: str) -> str:
+    """Return the risk badge (e.g. ``R5``) wrapped in severity-tiered Rich
+    markup (FMT-01).  Unknown/unresolved tiers keep the muted grey the badge
+    used before, so nothing regresses when a tier cannot be resolved."""
+    badge = _tool_risk_badge(tool_name)
+    match = re.match(r"R([0-8])$", badge)
+    if not match:
+        return f"[{COLORS['text_dim']}]{badge}[/]"
+    tier = int(match.group(1))
+    color = COLORS[_RISK_BADGE_COLOR_KEY[tier]]
+    weight = "bold " if tier >= 8 else ""
+    return f"[{weight}{color}]{badge}[/]"
+
+
 # ── Tool Name Mapping ────────────────────────────────────────────────
 # Map snake_case tool names to Antigravity-style display names
 
@@ -443,6 +494,51 @@ def _approval_risk_label(tool_name: str, resource: PermissionResource) -> str:
     return "resource access"
 
 
+def _approval_risk_tier(tool_name: str, resource: PermissionResource) -> int | None:
+    """Numeric risk tier (0-8) for a tool approval, or None for a non-tool
+    resource or an unresolved risk class (PROC-03)."""
+    if resource.kind != "tool":
+        return None
+    tool_def = tool_registry.get_tool(resource.name) or tool_registry.get_tool(tool_name)
+    value = str(getattr(getattr(tool_def, "risk_class", None), "value", "") or "")
+    match = re.match(r"r([0-8])_", value)
+    return int(match.group(1)) if match else None
+
+
+_HIGH_RISK_APPROVAL_TIER = 6
+
+
+def _is_high_risk_approval(tool_name: str, resource: PermissionResource) -> bool:
+    """PROC-03: R6-R8 tools (exploit assistance, extension execution, credentialed
+    remote action) are offensive/irreversible.  Their approval must not default to
+    'Allow once' and is confirmed by typing the tool name."""
+    tier = _approval_risk_tier(tool_name, resource)
+    return tier is not None and tier >= _HIGH_RISK_APPROVAL_TIER
+
+
+def _approval_default_index(
+    tool_name: str, resource: PermissionResource, options: list[tuple[str, str]]
+) -> int:
+    """Initially highlighted option.  High-risk approvals start on 'No' so a
+    reflexive Enter denies instead of authorising an offensive action."""
+    if _is_high_risk_approval(tool_name, resource):
+        for index, (code, _label) in enumerate(options):
+            if code == "DENY_ONCE":
+                return index
+    return 0
+
+
+def _typed_confirmation_token(tool_name: str, resource: PermissionResource) -> str:
+    """The token an operator must type to confirm a high-risk approval."""
+    if resource.kind == "tool":
+        return resource.name or tool_name
+    return tool_name
+
+
+def _typed_confirmation_matches(expected: str, typed: str) -> bool:
+    return str(typed).strip().casefold() == str(expected).strip().casefold()
+
+
 def _approval_feasibility_label(arguments: Dict[str, Any], resource: PermissionResource) -> str:
     if resource.kind in {"command", "command_exact", "command_prefix"}:
         return "sandbox/sudo checked before run"
@@ -453,6 +549,45 @@ def _approval_feasibility_label(arguments: Dict[str, Any], resource: PermissionR
     if resource.kind == "tool":
         return "scope/resource checked before run"
     return ""
+
+
+def _is_write_tool(tool_name: str) -> bool:
+    return tool_name in {"write_file", "create_file", "WriteFile", "Create"} or any(
+        alias in tool_name for alias in ("write_file", "create")
+    )
+
+
+def _write_file_diff_preview_lines(arguments: Dict[str, Any], width: int) -> list[str]:
+    """Pre-execution diff preview for write/create tools.
+
+    The operator approves against the actual content that will be written (numbered
+    ``+`` lines under an ``Added N lines`` summary) — the same agy-verified diff style
+    the result box uses, but shown BEFORE the write, at the approval gate. Without this
+    the diff only rendered on the result, i.e. after the write was irreversible (audit
+    T1.1; ASI09 Human-Agent Trust).
+    """
+    args = arguments or {}
+    content = str(args.get("content", "") or "")
+    path = str(args.get("path") or args.get("filepath") or "").strip()
+    content_lines = content.splitlines()
+    if not content_lines and not path:
+        return []
+    n_lines = len(content_lines)
+    line_label = "line" if n_lines == 1 else "lines"
+    summary = f"Added {n_lines} {line_label}"
+    if path:
+        summary = f"{summary} to {path}"
+    preview = [f"  ⎿  {summary}"]
+    safe_width = max(24, min(120, width - 14))
+    max_display = min(6, len(content_lines))
+    for idx, content_line in enumerate(content_lines[:max_display]):
+        display_line = content_line.rstrip()
+        if len(display_line) > safe_width:
+            display_line = display_line[: safe_width - 3] + "..."
+        preview.append(f"     {idx + 1:>4} +    {display_line}")
+    if len(content_lines) > max_display:
+        preview.append(f"     ... {len(content_lines) - max_display:,} more lines")
+    return preview
 
 
 def _approval_lines(
@@ -481,9 +616,22 @@ def _approval_lines(
         separator,
         f"  {_fit_display('Requesting permission for: ' + call_text, max(1, safe_width - 4))}",
         f"  {_fit_display(_approval_context_line(tool_name, arguments, resource), max(1, safe_width - 4))}",
-        "",
-        "Do you want to proceed?",
     ]
+
+    # PROC-03: an offensive/irreversible R6+ action is confirmed by typing its
+    # name; surface that at the gate so approval is deliberate, not reflexive.
+    if _is_high_risk_approval(tool_name, resource):
+        confirm_hint = "Type '" + _typed_confirmation_token(tool_name, resource) + "' to confirm; default is No."
+        lines.append("  " + _fit_display("⚠ High-risk, irreversible action.", max(1, safe_width - 4)))
+        lines.append("  " + _fit_display(confirm_hint, max(1, safe_width - 4)))
+
+    # Reviewable artifact BEFORE the gate: for write/create tools, show the diff the
+    # operator is about to approve — not just a prose summary rendered post-write (T1.1).
+    if _is_write_tool(tool_name):
+        for preview_line in _write_file_diff_preview_lines(arguments, safe_width):
+            lines.append(_fit_display(preview_line, safe_width))
+
+    lines.extend(["", "Do you want to proceed?"])
 
     for index, (_, label) in enumerate(options):
         cursor = ">" if index == selected else " "
@@ -584,6 +732,7 @@ class ToolCallBox:
             is_dangerous=is_dangerous,
         )
         call_markup = _tool_call_markup(tool_name, arguments)
+        risk_badge = _risk_badge_markup(tool_name)
         expand_tag = (
             f" [{COLORS['text_muted']}](ctrl+o to expand)[/{COLORS['text_muted']}]"
             if show_expand_tag else ""
@@ -592,8 +741,7 @@ class ToolCallBox:
         prefix = "\n" if leading_blank else ""
         console.print(
             f"{prefix}[{indicator_color}]{indicator_marker}[/{indicator_color}] "
-            f"{call_markup}"
-            f"{expand_tag}",
+            f"{call_markup}{expand_tag} {risk_badge}",
             no_wrap=True,
             overflow="ellipsis",
         )
@@ -609,10 +757,11 @@ class ToolCallBox:
             ● Requested Permission: write_file(/path) (ctrl+o to expand)
         """
         call_markup = _tool_call_markup(tool_name, arguments)
+        risk_badge = _risk_badge_markup(tool_name)
 
         console.print(
             f"\n[{COLORS['warning']}]●[/{COLORS['warning']}] "
-            f"{call_markup} "
+            f"{call_markup} {risk_badge} "
             f"[{COLORS['text_muted']}](ctrl+o to expand)[/{COLORS['text_muted']}]"
         )
 
@@ -626,6 +775,7 @@ class ToolCallBox:
     ) -> int:
         """Render the active tool execution row like AGY's running transcript."""
         call_markup = _tool_call_markup(tool_name, arguments)
+        risk_badge = _risk_badge_markup(tool_name)
         indicator_color = _tool_status_color(status="running")
         expand_tag = (
             f" [{COLORS['text_muted']}](ctrl+o to expand)[/{COLORS['text_muted']}]"
@@ -634,8 +784,7 @@ class ToolCallBox:
         prefix = "\n" if leading_blank else ""
         console.print(
             f"{prefix}[{indicator_color}]●[/{indicator_color}] "
-            f"{call_markup}"
-            f"{expand_tag}",
+            f"{call_markup}{expand_tag} {risk_badge}",
             no_wrap=True,
             overflow="ellipsis",
         )
@@ -822,8 +971,10 @@ class ApprovalPrompt:
             resource = PermissionResource(kind="command_exact", name=_normalize_command_prefix(command))
 
         options = _approval_options(resource)
-        # Match Antigravity's approval picker: first action is selected.
-        selected = 0
+        # PROC-03: high-risk (R6+) approvals start on "No" so a reflexive Enter
+        # denies; other approvals keep Antigravity's first-action default.
+        high_risk = _is_high_risk_approval(tool_name, resource)
+        selected = _approval_default_index(tool_name, resource, options)
         amended_arguments: Dict[str, Any] | None = None
 
         c_success = ansi("success", bold=True)
@@ -908,6 +1059,22 @@ class ApprovalPrompt:
                 sys.stdout.flush()
                 return True
 
+            def prompt_for_high_risk_confirmation() -> bool:
+                nonlocal rendered_lines
+                token = _typed_confirmation_token(tool_name, resource)
+                tier = _approval_risk_tier(tool_name, resource)
+                _clear_rendered_lines(rendered_lines)
+                rendered_lines = 0
+                sys.stdout.write("\x1b[?25h")
+                sys.stdout.flush()
+                label = f"R{tier} " if tier is not None else ""
+                sys.stdout.write(f"  ⚠ {label}high-risk. Type '{token}' to confirm (blank cancels): ")
+                sys.stdout.flush()
+                typed = sys.stdin.readline().strip()
+                sys.stdout.write("\x1b[?25l")
+                sys.stdout.flush()
+                return _typed_confirmation_matches(token, typed)
+
             sys.stdout.write("\x1b[?25l")
             sys.stdout.flush()
             try:
@@ -919,11 +1086,14 @@ class ApprovalPrompt:
                     elif key == "down":
                         selected = (selected + 1) % len(options)
                     elif key == "enter":
+                        code = options[selected][0]
+                        if high_risk and code.startswith("ALLOW") and not prompt_for_high_risk_confirmation():
+                            continue
                         _clear_rendered_lines(rendered_lines)
                         rendered_lines = 0
                         sys.stdout.write("\x1b[?25h")
                         sys.stdout.flush()
-                        return options[selected][0]
+                        return code
                     elif key in {"amend", "edit"}:
                         if prompt_for_command_edit():
                             return "AMEND_COMMAND"

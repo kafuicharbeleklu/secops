@@ -252,6 +252,30 @@ class RuntimeState:
             needle = f"a{int(needle):03d}"
         return next((artifact for artifact in self.artifacts if artifact.id.lower() == needle), None)
 
+    def update_artifact(
+        self,
+        artifact_id: str,
+        *,
+        title: str | None = None,
+        content: str | None = None,
+        metadata: dict[str, object] | None = None,
+        path: Path | None = None,
+    ) -> RuntimeArtifact | None:
+        """Update a durable artifact in place without changing its review ID."""
+        artifact = self.get_artifact(artifact_id)
+        if artifact is None:
+            return None
+        if title is not None:
+            artifact.title = str(title).strip() or artifact.title
+        if content is not None:
+            artifact.content = str(content)
+        if metadata is not None:
+            artifact.metadata = dict(metadata)
+        if path is not None:
+            artifact.path = path
+        self.reset_ctrl_o_surface(clear_anchor=True)
+        return artifact
+
     def attachment_artifacts(self) -> list[RuntimeArtifact]:
         return [artifact for artifact in self.artifacts if artifact.kind == "attachment"]
 

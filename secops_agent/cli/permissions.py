@@ -9,6 +9,7 @@ PERMISSIONS_USAGE = "Usage: /permissions [allow|ask|deny|clear] <resource>"
 PERMISSIONS_RULE_USAGE = "Usage: /permissions allow|ask|deny tool(name)"
 PERMISSION_RULE_ACTIONS = frozenset({"allow", "ask", "deny"})
 PERMISSION_MODES = (
+    "plan",
     "request-review",
     "proceed-in-sandbox",
     "always-proceed",
@@ -22,6 +23,7 @@ class PermissionArgument:
     action: str = ""
     resource_text: str = ""
     error: str = ""
+    confirmed: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,7 +45,20 @@ def parse_permission_argument(argument: str) -> PermissionArgument:
     if action == "clear":
         return PermissionArgument(kind="clear", action=action)
     if action in PERMISSION_RULE_ACTIONS and resource_text:
-        return PermissionArgument(kind="rule", action=action, resource_text=resource_text)
+        # A trailing `confirm` token is the explicit second confirmation required to
+        # grant a blanket allow on a high-risk (r5+/compound) resource (audit T2.8).
+        confirmed = False
+        if not resource_text.endswith(")"):
+            head, _, tail = resource_text.rpartition(" ")
+            if head and tail.lower() == "confirm":
+                confirmed = True
+                resource_text = head.strip()
+        return PermissionArgument(
+            kind="rule",
+            action=action,
+            resource_text=resource_text,
+            confirmed=confirmed,
+        )
     return PermissionArgument(kind="invalid", action=action, error=PERMISSIONS_USAGE)
 
 
@@ -72,3 +87,12 @@ def normalize_permission_mode(
         choices = ", ".join(PERMISSION_MODES)
         raise ValueError(f"Unknown permission mode '{mode}'. Use one of: {choices}.")
     return normalized
+
+
+def next_permission_mode(current: str) -> str:
+    """Return the next permission mode in cycle order (PROC-02, Shift+Tab)."""
+    try:
+        index = PERMISSION_MODES.index(current)
+    except ValueError:
+        return PERMISSION_MODES[0]
+    return PERMISSION_MODES[(index + 1) % len(PERMISSION_MODES)]

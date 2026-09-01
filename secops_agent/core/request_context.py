@@ -9,6 +9,7 @@ drive tool chaining decisions by themselves.
 
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -284,56 +285,68 @@ def _scope_status(target: str, mission: Any | None) -> ScopeStatus:
     return ScopeStatus.MISSING
 
 
+# --- Operator-declared environment (explicit signal) -----------------------------
+# CTF / private-lab escalate autonomy (AutonomyPolicy.for_environment → SUPERVISED,
+# which pauses *less* on exploit steps). That escalation must be *earned* on a reliable
+# operator signal, never granted by prompt — or tool/target output — phrasing such as
+# "flag", "htb", "room" or "user.txt". Only an explicit operator action — the SECOPS_ENV
+# environment variable, or the --env CLI flag / config via set_operator_environment() —
+# can declare a CTF/private-lab environment. Prompt/tool-output content cannot set it.
+# (Audit R3.8 / ASI01 Agent Goal Hijack.)
+
+_ENVIRONMENT_ALIASES: dict[str, EnvironmentHint] = {
+    "ctf": EnvironmentHint.CTF_ONLINE,
+    "ctf_online": EnvironmentHint.CTF_ONLINE,
+    "lab": EnvironmentHint.PRIVATE_LAB,
+    "private_lab": EnvironmentHint.PRIVATE_LAB,
+    "private-lab": EnvironmentHint.PRIVATE_LAB,
+    "homelab": EnvironmentHint.PRIVATE_LAB,
+    "authorized": EnvironmentHint.AUTHORIZED_ORG,
+    "authorized_org": EnvironmentHint.AUTHORIZED_ORG,
+    "org": EnvironmentHint.AUTHORIZED_ORG,
+}
+
+_OPERATOR_ENVIRONMENT: EnvironmentHint | None = None
+
+
+def parse_environment_signal(value: str | None) -> EnvironmentHint | None:
+    """Map an operator-supplied env token (SECOPS_ENV / --env / config) to a hint."""
+    if not value:
+        return None
+    return _ENVIRONMENT_ALIASES.get(str(value).strip().casefold())
+
+
+def set_operator_environment(hint: EnvironmentHint | str | None) -> None:
+    """Set the operator-declared environment from a CLI flag or config value.
+
+    Passing ``None`` clears the override (falling back to SECOPS_ENV). This is the
+    only in-process way to declare CTF/private-lab; classify_request() never infers
+    it from request text (audit R3.8 / ASI01).
+    """
+    global _OPERATOR_ENVIRONMENT
+    if hint is None or isinstance(hint, EnvironmentHint):
+        _OPERATOR_ENVIRONMENT = hint
+    else:
+        _OPERATOR_ENVIRONMENT = parse_environment_signal(hint)
+
+
+def operator_environment() -> EnvironmentHint | None:
+    """The explicit operator environment: CLI/config override first, then SECOPS_ENV."""
+    if _OPERATOR_ENVIRONMENT is not None:
+        return _OPERATOR_ENVIRONMENT
+    return parse_environment_signal(os.getenv("SECOPS_ENV"))
+
+
 def _environment_hint(text: str) -> EnvironmentHint:
-    private_lab_markers = (
-        "virtualbox",
-        "vmware",
-        "proxmox",
-        "hyperviseur",
-        "hypervisor",
-        "kvm",
-        "qemu",
-        "homelab",
-        "home lab",
-        "lab prive",
-        "lab privee",
-        "reseau virtuel",
-        "infrastructure virtuelle",
-        "environnement virtuel",
-        "virtual env",
-        "vm ",
-        "ma vm",
-        "mes vm",
-    )
-    if _contains_any(text, private_lab_markers):
-        return EnvironmentHint.PRIVATE_LAB
+    # CTF / private-lab escalate autonomy, so they come ONLY from an explicit operator
+    # signal — never from prompt or tool-output substrings (audit R3.8 / ASI01).
+    declared = operator_environment()
+    if declared is not None:
+        return declared
 
-    ctf_markers = (
-        "tryhackme",
-        "try hack me",
-        "hackthebox",
-        "hack the box",
-        "htb",
-        "rootme",
-        "root-me",
-        "portswigger",
-        "port swigger",
-        "web security academy",
-        "picoctf",
-        "pico ctf",
-        "overthewire",
-        "over the wire",
-        "vulnhub",
-        "capture the flag",
-        "ctf",
-        "user.txt",
-        "root.txt",
-        "flag",
-        "room",
-    )
-    if _contains_any(text, ctf_markers):
-        return EnvironmentHint.CTF_ONLINE
-
+    # Non-escalating and informational only: an authorized-org label may still be
+    # inferred from text. AutonomyPolicy.for_environment() does NOT escalate on it,
+    # so free-text here cannot widen autonomy.
     authorized_markers = (
         "audit",
         "assessment",

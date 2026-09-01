@@ -968,6 +968,132 @@ class _RepeatToolLLM:
         )
 
 
+class WriteFileDenyReachabilityTests(unittest.IsolatedAsyncioTestCase):
+    """Audit R3.5 — the write_file system-path DENY must not be dead code."""
+
+    def test_write_file_system_path_deny_is_reachable(self):
+        engine = PermissionEngine()
+        decision, resource = engine.evaluate_tool_arguments(
+            "write_file", {"path": "/etc/passwd", "content": "x"}
+        )
+        self.assertEqual(decision, PermissionDecision.DENY)
+        self.assertEqual(resource.value, "write_file(/etc/passwd)")
+        # A normal workspace path is not categorically denied (still gated to ASK).
+        decision2, _ = engine.evaluate_tool_arguments(
+            "write_file", {"path": "/tmp/exploit.py", "content": "x"}
+        )
+        self.assertEqual(decision2, PermissionDecision.ASK)
+
+    async def test_write_file_to_etc_is_denied_before_execution(self):
+        executed = []
+
+        async def write_file(path: str, content: str):
+            executed.append(path)
+            return "written"
+
+        registry = ToolRegistry()
+        registry.register(
+            name="write_file",
+            description="Write a file",
+            category=ToolCategory.SYSTEM,
+            parameters={
+                "path": {"type": "string", "required": True},
+                "content": {"type": "string", "required": True},
+            },
+            func=write_file,
+            dangerous=True,
+        )
+        agent = SecOpsAgent(
+            llm=OneToolLLM("write_file", {"path": "/etc/passwd", "content": "x"}),
+            registry=registry,
+            memory=ConversationMemory(),
+            permissions=PermissionEngine(),
+            max_iterations=1,
+        )
+
+        events = await _run_agent(agent)
+
+        self.assertEqual(executed, [])
+        self.assertFalse(any(isinstance(event, ToolStartEvent) for event in events))
+        result = next(event.result for event in events if isinstance(event, ToolResultEvent))
+        self.assertIn("Permission denied by policy: write_file(/etc/passwd)", result.error or "")
+
+
+class ActiveEnumerationTierAgreementTests(unittest.TestCase):
+    """Audit T2.7 — risk_class and approval behavior must agree for every r3 tool."""
+
+    def test_every_active_enumeration_tool_routes_through_approval(self):
+        from secops_agent.core.tools import ToolRiskClass, _BUILTIN_TOOL_RISK_CLASSES
+
+        engine = PermissionEngine()
+        r3_tools = [
+            name
+            for name, risk_class in _BUILTIN_TOOL_RISK_CLASSES.items()
+            if risk_class == ToolRiskClass.ACTIVE_ENUMERATION
+        ]
+        # Guard against the map silently losing the two tools the audit flagged.
+        self.assertIn("nmap_scan", r3_tools)
+        self.assertIn("subdomain_enum", r3_tools)
+        for name in r3_tools:
+            with self.subTest(tool=name):
+                self.assertNotEqual(
+                    engine.evaluate_tool(name),
+                    PermissionDecision.ALLOW,
+                    f"{name} is r3 (active enumeration) but auto-allows against a real target",
+                )
+
+
+class PermissionRuleGuardTests(unittest.TestCase):
+    """Audit T2.8 — /permissions allow must guard high-risk (r5+/compound) grants."""
+
+    def test_high_risk_tool_allow_requires_confirmation(self):
+        engine = PermissionEngine()
+        # r3 recon tool: a blanket allow is a plain one-liner (no second confirm).
+        self.assertFalse(
+            engine.rule_requires_confirmation(
+                engine.tool_resource("nmap_scan"), PermissionDecision.ALLOW
+            )
+        )
+        # r5 privileged shell tool: a blanket allow must be explicitly re-confirmed
+        # — it must NOT succeed the same way allowing nmap_scan does.
+        self.assertTrue(
+            engine.rule_requires_confirmation(
+                engine.tool_resource("run_shell"), PermissionDecision.ALLOW
+            )
+        )
+
+    def test_high_risk_guard_only_applies_to_allow(self):
+        engine = PermissionEngine()
+        self.assertFalse(
+            engine.rule_requires_confirmation(
+                engine.tool_resource("run_shell"), PermissionDecision.DENY
+            )
+        )
+        self.assertFalse(
+            engine.rule_requires_confirmation(
+                engine.tool_resource("run_shell"), PermissionDecision.ASK
+            )
+        )
+
+    def test_compound_command_allow_requires_confirmation(self):
+        engine = PermissionEngine()
+        # Audit T2.8 live proof: command_prefix(whoami && id) reached settings.json
+        # via the unguarded CLI path; a compound command must never get a blanket allow.
+        self.assertTrue(
+            engine.rule_requires_confirmation(
+                engine.command_exact_resource("whoami && id"),
+                PermissionDecision.ALLOW,
+            )
+        )
+        # A plain single-word command allow stays a simple one-liner.
+        self.assertFalse(
+            engine.rule_requires_confirmation(
+                engine.command_exact_resource("whoami"),
+                PermissionDecision.ALLOW,
+            )
+        )
+
+
 class LoopConvergenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_repeated_identical_tool_call_stops_before_max_iterations(self):
         runs = {"n": 0}

@@ -3,10 +3,18 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from secops_agent.core.agent import SecOpsAgent, TextEvent, ToolCallEvent, ToolStartEvent
-from secops_agent.core.llm import Message, StreamChunk
+from secops_agent.core.agent import (
+    ApprovalRequestEvent,
+    SecOpsAgent,
+    TextEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+    ToolStartEvent,
+)
+from secops_agent.core.llm import Message, StreamChunk, ToolCallChunk
 from secops_agent.core.memory import ConversationMemory
-from secops_agent.core.permissions import PermissionEngine
+from secops_agent.core.permissions import ApprovalDecision, PermissionEngine
+from secops_agent.core.request_context import EnvironmentHint, set_operator_environment
 from secops_agent.core.tools import ToolCategory, ToolRegistry
 
 
@@ -51,10 +59,36 @@ class ArchivedToolMarkerLLM:
         yield StreamChunk(content='[Archived tool call: http_get {"url": "http://10.10.10.5/panel/"}]')
 
 
-async def _collect(agent: SecOpsAgent, prompt: str):
+class ForcedToolCallLLM:
+    """Emits a call even when the agent exposes no matching schema."""
+
+    model_name = "forced-tool-call"
+
+    def __init__(self, tool_name: str, arguments: dict):
+        self.tool_name = tool_name
+        self.arguments = arguments
+        self.tools_schema = None
+
+    def prepare_for_prompt(self, prompt: str, **kwargs):
+        pass
+
+    async def stream_chat(self, messages: list[Message], tools_schema=None):
+        self.tools_schema = tools_schema or []
+        yield StreamChunk(
+            tool_call=ToolCallChunk(
+                name=self.tool_name,
+                arguments=self.arguments,
+                id="forced-tool-call",
+            )
+        )
+
+
+async def _collect(agent: SecOpsAgent, prompt: str, approval: ApprovalDecision | None = None):
     events = []
     async for event in agent.stream_response(prompt):
         events.append(event)
+        if approval is not None and isinstance(event, ApprovalRequestEvent):
+            event.approval_future.set_result(approval)
     return events
 
 
@@ -77,6 +111,50 @@ def _registry_with_tools(*names: str) -> ToolRegistry:
 
 
 class RequestRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_post_exploitation_blocks_residual_tool_calls_and_exposes_no_schema(self):
+        from secops_agent.core.mission import Credential, MissionContext, POST_EXPLOITATION_BOUNDARY
+        from secops_agent.core.structured_memory import StructuredMemory
+
+        executed: list[dict] = []
+        registry = ToolRegistry()
+
+        async def webshell_exec(**kwargs):
+            executed.append(kwargs)
+            return "should never execute"
+
+        registry.register(
+            name="webshell_exec",
+            description="Execute a webshell command",
+            category=ToolCategory.EXPLOIT,
+            parameters={"shell_url": {"type": "string", "required": True}},
+            func=webshell_exec,
+            dangerous=True,
+        )
+        memory = ConversationMemory()
+        mission = MissionContext(name="post-exploitation boundary")
+        mission.credentials.append(
+            Credential(username="alice", secret="redacted", host="10.10.10.5", service="ssh")
+        )
+        mission.refresh_phase_from_state()
+        llm = ForcedToolCallLLM("webshell_exec", {"shell_url": "http://10.10.10.5/shell.php"})
+        agent = SecOpsAgent(
+            llm,
+            registry,
+            memory,
+            permissions=PermissionEngine(),
+            structured_memory=StructuredMemory(conversation=memory, mission=mission),
+        )
+
+        events = await _collect(agent, "continue the assessment")
+
+        self.assertEqual(llm.tools_schema, [])
+        self.assertEqual(executed, [])
+        self.assertEqual([event.name for event in events if isinstance(event, ToolStartEvent)], [])
+        results = [event for event in events if isinstance(event, ToolResultEvent)]
+        self.assertEqual(len(results), 1)
+        self.assertIn("non-intrusive", results[0].result.error or "")
+        self.assertIn(POST_EXPLOITATION_BOUNDARY, mission.blocked_reasons)
+
     async def test_time_question_is_answered_without_llm_or_tool_call(self):
         llm = BrokenLLM()
         agent = SecOpsAgent(
@@ -149,7 +227,9 @@ Find directories on the web server using the GoBuster tool.
 What is the hidden directory?
 """
 
-        events = await _collect(agent, prompt)
+        # nmap_scan is r3 active enumeration: it now routes through approval before it
+        # hits the real target (audit T2.7), so the operator must approve it.
+        events = await _collect(agent, prompt, approval=ApprovalDecision(allowed=True))
         text = "".join(event.content for event in events if isinstance(event, TextEvent))
 
         self.assertFalse(llm.called)
@@ -157,6 +237,10 @@ What is the hidden directory?
         self.assertEqual(
             [(event.name, event.arguments) for event in events if isinstance(event, ToolCallEvent)],
             [("nmap_scan", {"target": "10.129.134.39", "scan_type": "version"})],
+        )
+        self.assertEqual(
+            [event.tool_name for event in events if isinstance(event, ApprovalRequestEvent)],
+            ["nmap_scan"],
         )
         self.assertEqual(
             [(event.name, event.arguments) for event in events if isinstance(event, ToolStartEvent)],
@@ -542,7 +626,13 @@ class MemoryBriefingTests(unittest.TestCase):
 
 
 class EnvironmentAwareAutonomyTests(unittest.TestCase):
-    """Chantier 2: autonomy adapts per turn to the detected environment."""
+    """Chantier 2: autonomy adapts per turn to the operator-declared environment."""
+
+    def setUp(self):
+        # A CTF/lab environment escalates autonomy, but only via an explicit operator
+        # signal — never inferred from "HackTheBox"/"flag" text (audit R3.8 / ASI01).
+        set_operator_environment(None)
+        self.addCleanup(set_operator_environment, None)
 
     def _agent(self, autonomy=None):
         return SecOpsAgent(
@@ -557,6 +647,7 @@ class EnvironmentAwareAutonomyTests(unittest.TestCase):
         from secops_agent.core.autonomy import AutonomyLevel
         from secops_agent.core.request_context import classify_request
 
+        set_operator_environment(EnvironmentHint.CTF_ONLINE)  # operator declared --env ctf
         agent = self._agent()
         decision = classify_request(
             "lance la phase d'exploitation complète sur la box HackTheBox"
@@ -586,6 +677,7 @@ class EnvironmentAwareAutonomyTests(unittest.TestCase):
     def test_unapproved_exploit_in_lab_exposes_safe_baseline_not_offensive(self):
         from secops_agent.core.request_context import classify_request
 
+        set_operator_environment(EnvironmentHint.CTF_ONLINE)  # operator declared --env ctf
         agent = self._agent()
         decision = classify_request("upload a php webshell on the HackTheBox machine")
         names = {s["name"] for s in agent._tools_schema_for_decision(decision)}

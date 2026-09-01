@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,8 +34,9 @@ from secops_agent.cli.surfaces import should_use_interactive_surface
 from secops_agent.cli.tasks import TASK_USAGE, parse_task_argument
 from secops_agent.cli.tools import parse_tool_argument
 from secops_agent.cli.workspace import ADD_DIR_USAGE, parse_add_dir_argument
-from secops_agent.main import run_chat_loop
-from secops_agent.ui.commands import get_command
+from secops_agent.main import _export_pentest_report, _unknown_command_message, run_chat_loop
+from secops_agent.core.mission import MissionContext
+from secops_agent.ui.commands import get_command, suggest_command
 
 
 class CliSurfaceTests(unittest.TestCase):
@@ -299,6 +301,23 @@ class CliSurfaceTests(unittest.TestCase):
         self.assertEqual(invalid.kind, "invalid")
         self.assertEqual(invalid.error, PERMISSIONS_USAGE)
 
+    def test_permission_rule_confirm_token_is_parsed(self):
+        # Audit T2.8: a high-risk allow needs an explicit `confirm` second confirmation.
+        plain = parse_permission_argument("allow tool(run_shell)")
+        self.assertEqual(plain.kind, "rule")
+        self.assertEqual(plain.resource_text, "tool(run_shell)")
+        self.assertFalse(plain.confirmed)
+
+        confirmed = parse_permission_argument("allow tool(run_shell) confirm")
+        self.assertEqual(confirmed.kind, "rule")
+        self.assertEqual(confirmed.resource_text, "tool(run_shell)")
+        self.assertTrue(confirmed.confirmed)
+
+        # The token must not corrupt a resource that legitimately ends in ')'.
+        compound = parse_permission_argument("allow command_exact(whoami && id) confirm")
+        self.assertEqual(compound.resource_text, "command_exact(whoami && id)")
+        self.assertTrue(compound.confirmed)
+
     def test_plan_permission_command_preserves_current_main_branching(self):
         menu = plan_permission_command("", interactive_surface=True)
         show = plan_permission_command("", interactive_surface=False)
@@ -321,6 +340,7 @@ class CliSurfaceTests(unittest.TestCase):
 
     def test_normalize_permission_mode_preserves_current_cli_semantics(self):
         self.assertEqual(normalize_permission_mode(None), "request-review")
+        self.assertEqual(normalize_permission_mode("plan"), "plan")
         self.assertEqual(normalize_permission_mode(" STRICT "), "strict")
         self.assertEqual(
             normalize_permission_mode("request-review", dangerously_skip_permissions=True),
@@ -351,6 +371,25 @@ class CliSurfaceTests(unittest.TestCase):
     def test_parse_slash_command_rejects_non_slash_input(self):
         with self.assertRaises(ValueError):
             parse_slash_command("hello", get_command)
+
+    def test_unknown_command_suggests_close_canonical_command_and_usage(self):
+        suggestion = suggest_command("/permissons")
+
+        self.assertIsNotNone(suggestion)
+        self.assertEqual(suggestion.name, "/permissions")
+        self.assertEqual(
+            _unknown_command_message("/permissons"),
+            "Unknown command: /permissons\n"
+            "Did you mean /permissions?\n"
+            "Usage: /permissions [allow|ask|deny|clear] <resource>",
+        )
+
+    def test_unknown_command_falls_back_to_help_when_not_close(self):
+        self.assertIsNone(suggest_command("/unrelated-command"))
+        self.assertEqual(
+            _unknown_command_message("/unrelated-command"),
+            "Unknown command: /unrelated-command\nUse /help to list available commands.",
+        )
 
     def test_interactive_surface_requires_known_command_tty_and_no_argument(self):
         self.assertTrue(
@@ -388,6 +427,15 @@ class CliSurfaceTests(unittest.TestCase):
 
     def test_main_keeps_run_chat_loop_compatibility_export(self):
         self.assertTrue(callable(run_chat_loop))
+
+    def test_structured_report_export_writes_markdown(self):
+        mission = MissionContext(name="CLI report test")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("secops_agent.main.Path.home", return_value=Path(tmpdir)):
+                path = _export_pentest_report(mission, "assessment")
+
+            self.assertEqual(path, Path(tmpdir) / ".secops_agent" / "reports" / "assessment.md")
+            self.assertIn("# CLI report test Pentest Report", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

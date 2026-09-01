@@ -75,8 +75,35 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return int(h[:2], 16), int(h[2:4], 16), int(h[4:], 16)
 
 
+def color_enabled() -> bool:
+    """Honour the NO_COLOR / CLICOLOR conventions for raw-ANSI output (X-02).
+
+    Rich already strips colour under NO_COLOR for its own rendering; this covers
+    the raw-ANSI surfaces (approval prompt, menus, sudo prompt) that build escape
+    codes directly through ``ansi()`` / ``ansi_hex()``.
+    """
+    if os.environ.get("CLICOLOR_FORCE", "") not in ("", "0"):
+        return True
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    if os.environ.get("CLICOLOR") == "0":
+        return False
+    return True
+
+
+def reduced_motion() -> bool:
+    """Honour a 'less animation' preference (SSH, slow terminals, accessibility).
+
+    Set ``SECOPS_REDUCED_MOTION=1`` to swap the animated spinner for a static
+    indicator and suppress host-terminal progress signalling (X-02 / ANIM-05).
+    """
+    return os.environ.get("SECOPS_REDUCED_MOTION", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def ansi(color_key: str, bold: bool = False) -> str:
     """Convert a theme color key to a TrueColor ANSI escape sequence."""
+    if not color_enabled():
+        return ""
     r, g, b = _hex_to_rgb(COLORS[color_key])
     if bold:
         return f"\x1b[1;38;2;{r};{g};{b}m"
@@ -85,10 +112,32 @@ def ansi(color_key: str, bold: bool = False) -> str:
 
 def ansi_hex(hex_color: str, bold: bool = False) -> str:
     """Convert a raw hex color to a TrueColor ANSI escape sequence."""
+    if not color_enabled():
+        return ""
     r, g, b = _hex_to_rgb(hex_color)
     if bold:
         return f"\x1b[1;38;2;{r};{g};{b}m"
     return f"\x1b[38;2;{r};{g};{b}m"
+
+
+def hyperlink(label: str, url: str) -> str:
+    """Rich markup for an OSC 8 terminal hyperlink (X-03).  Rich emits the escape
+    only where the terminal supports links and otherwise renders the label
+    plainly, so this is safe to embed anywhere that goes through the console."""
+    return f"[link={url}]{label}[/link]"
+
+
+def file_link(path: Any, label: str | None = None) -> str:
+    """OSC 8 hyperlink to a local file (X-03).  Falls back to plain text when the
+    path cannot be expressed as a file URI."""
+    from pathlib import Path as _Path
+
+    display = str(path) if label is None else label
+    try:
+        uri = _Path(path).resolve().as_uri()
+    except (ValueError, OSError):
+        return display
+    return hyperlink(display, uri)
 
 
 # ── prompt_toolkit Style Dict ────────────────────────────────────────

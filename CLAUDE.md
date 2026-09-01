@@ -14,8 +14,9 @@ the agentic behavior tracks Claude Code / Codex CLI applied to offensive securit
 **`docs/ARCHITECTURE.md` is canonical — read it before any non-trivial change to
 the agent core, memory, planning, or autonomy.** It describes the *target* design
 (~80% realized) and its §-numbers (§3 loop, §5 memory, §6 tools, §7 autonomy) are
-referenced from code comments. `docs/BACKEND_REVIEW_2026-06-28.md` holds the live
-agentic-quality backlog (P1–P6).
+referenced from code comments. `docs/BACKEND_REVIEW_2026-06-28.md` (P1–P6) is
+**resolved/historical**; the live review trail is the dated `docs/*_AUDIT_*.md`
+set — most recent `docs/UX_AUDIT_2026-08-27.md` (10 residual findings).
 
 ## Commands
 
@@ -76,10 +77,23 @@ If a recon answer's wording is wrong, fix it **there**, not in a prompt.
 canonical mission state), `KnowledgeBase`. Long-term: `ExperienceStore`/`CaseLesson`
 (`core/experience.py`) — annotates and reranks, **never authorizes**; lessons are
 written `unreviewed` and quarantined until human-promoted. Tool output reaches memory
-**only** via `core/result_parser.py` — a tool with no parser is an OBSERVE blind spot.
+**only** via `core/result_parser.py` — now a façade/registry over the
+`core/result_parsers/*` implementations (recon/web/exploit/system/observation/local).
+Add a new tool's parser there and register it in the façade; a tool with no parser is
+an OBSERVE blind spot.
+
+**Prompt-injection defense (ASI01, don't regress).** Every tool result is run through
+`core/output_sanitizer.py::sanitize_tool_output` at `memory.py` `add_tool_result` before
+it enters conversation memory: it strips known injection patterns and wraps output in
+`── TOOL DATA … ── END TOOL DATA ──` boundary markers. This is the primary **ASI01 Agent
+Goal Hijack** / indirect-injection guard — keep tool-derived text flowing through it.
+Two adjacent channels are covered separately: unreviewed `CaseLesson` text is **excluded**
+from the assembled prompt until human promotion (`agent._relevant_lessons_briefing`), and
+autonomy escalation (CTF/lab) is gated on an **explicit operator signal** (`--env` /
+`SECOPS_ENV` / `set_operator_environment`), never on prompt or tool-output substrings.
 
 **Tools.** Implementations in `secops_agent/tools/` by domain. Register with `@tool(...)`
-(`core/tools.py`) and set `risk_class` (r0–r6) so autonomy/permission layers gate
+(`core/tools.py`) and set `risk_class` (r0–r8) so autonomy/permission layers gate
 correctly. Real subprocess execution belongs **only** in `tools/`. `core/mcp.py` is an
 MCP **client** — it consumes external stdio servers under the `mcp_` prefix.
 

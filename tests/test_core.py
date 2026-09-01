@@ -181,12 +181,22 @@ from secops_agent.core.permissions import (
 
 class TestPermissions:
     def test_passive_tools_are_allow(self):
-        passive_tools = ["ping_host", "dns_lookup", "nmap_scan", "ssl_check", "cve_lookup"]
+        passive_tools = ["ping_host", "dns_lookup", "ssl_check", "cve_lookup"]
         for tool in passive_tools:
             assert TOOL_TIERS.get(tool) == ActionTier.PASSIVE, f"{tool} should be PASSIVE"
 
     def test_active_tools_require_confirmation(self):
-        active_tools = ["dir_brute", "nikto_scan", "sql_injection_test", "run_shell", "generate_payload"]
+        # nmap_scan and subdomain_enum are r3 active enumeration: they hit a real
+        # target and must route through approval, not auto-allow (audit T2.7).
+        active_tools = [
+            "nmap_scan",
+            "subdomain_enum",
+            "dir_brute",
+            "nikto_scan",
+            "sql_injection_test",
+            "run_shell",
+            "generate_payload",
+        ]
         for tool in active_tools:
             assert TOOL_TIERS.get(tool) == ActionTier.ACTIVE, f"{tool} should be ACTIVE"
 

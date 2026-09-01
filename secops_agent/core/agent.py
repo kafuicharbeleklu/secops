@@ -30,7 +30,13 @@ from secops_agent.core.memory import ConversationMemory
 from secops_agent.core.experience import build_lesson_from_tool_result, build_suggestion_signal
 from secops_agent.core.hooks import HookManager
 from secops_agent.core.observability import StructuredTracer, TraceSink, trace_sink_from_settings
-from secops_agent.core.mission import ActionTraceEntry
+from secops_agent.core.mission import (
+    POST_EXPLOITATION_BOUNDARY,
+    ActionTraceEntry,
+    MissionPlan,
+    PentestPhase,
+    PlanStep,
+)
 from secops_agent.core.autonomy import AutonomyLevel, AutonomyPolicy
 from secops_agent.core.planner import MissionPlanner, NextAction
 from secops_agent.core.request_context import (
@@ -182,6 +188,49 @@ class TokenUsageEvent:
     output_tokens: int
 
 
+@dataclass
+class PlanPreviewEvent:
+    """Emitted once, before the mission's first active (>= r2) step, to show the
+    candidate trajectory (audit item #7 / T2.1).
+
+    This is an added *review* gate, never an authorization: the per-tool
+    PermissionEngine still gates each step afterward. ``acknowledgment_future`` is
+    ``None`` when the plan is auto-acknowledged (SANDBOX / print) — informational
+    only — otherwise the consumer resolves it with an ``ApprovalDecision`` (or a
+    bool) to acknowledge or decline the plan. A decline aborts the pending tool
+    exactly like a denied approval.
+    """
+    plan: MissionPlan
+    acknowledgment_future: Optional[asyncio.Future] = None
+
+
+@dataclass
+class PlanDivergenceEvent:
+    """Emitted when an active tool runs that was not in the acknowledged plan.
+
+    Surfaces the divergence instead of letting the mission silently drift from the
+    trajectory the operator approved. Fired once per diverging tool.
+    """
+    tool_name: str
+    reason: str = ""
+
+
+@dataclass
+class FindingEvent:
+    """Emitted at OBSERVE when a new item is added to the mission blackboard — the
+    moment a finding/service/host becomes known (audit item #7 / T2.2).
+
+    Consumed by the artifact tracker so ``/artifact`` is a complete, discovery-
+    ordered record written live during the mission, not reconstructed from the
+    transcript. Deduped by mission key: re-observing the same scan does not re-emit.
+    """
+    kind: str          # finding | service | host | credential
+    title: str
+    detail: str = ""
+    severity: str = "info"
+    source: str = ""   # the tool that surfaced it
+
+
 AgentEvent = Union[
     ThinkingEvent,
     TextEvent,
@@ -195,6 +244,9 @@ AgentEvent = Union[
     ApprovalRequestEvent,
     SudoAuthenticationRequestEvent,
     TokenUsageEvent,
+    PlanPreviewEvent,
+    PlanDivergenceEvent,
+    FindingEvent,
 ]
 
 
@@ -601,6 +653,29 @@ class SecOpsAgent:
             else None
         )
 
+    def _post_exploitation_boundary_active(self) -> bool:
+        """Return whether this mission has reached the product boundary."""
+        mission = self._mission()
+        phase = getattr(mission, "phase", None)
+        return phase == PentestPhase.POST_EXPLOITATION or (
+            getattr(phase, "value", phase) == PentestPhase.POST_EXPLOITATION.value
+        )
+
+    def _post_exploitation_guard_result(self) -> ToolResult | None:
+        """Block all residual tool calls after access has been recorded.
+
+        Schema filtering is a helpful model-facing constraint, but it is not an
+        authority boundary: an untrusted or confused model can still emit a tool
+        call. Keep this check immediately before execution gates as the durable
+        product control.
+        """
+        if not self._post_exploitation_boundary_active():
+            return None
+        mission = self._mission()
+        if mission is not None and POST_EXPLOITATION_BOUNDARY not in mission.blocked_reasons:
+            mission.blocked_reasons.append(POST_EXPLOITATION_BOUNDARY)
+        return ToolResult(success=False, output="", error=POST_EXPLOITATION_BOUNDARY)
+
     def autonomy_posture(self) -> str:
         """Human label of the configured autonomy posture (G4, display only)."""
         return self.autonomy.label
@@ -612,6 +687,184 @@ class SecOpsAgent:
             return ""
         phase = getattr(mission, "phase", None)
         return phase.value if hasattr(phase, "value") else str(phase or "")
+
+    # ---------------------------------------------------------------
+    # Mission plan preview (audit item #7 / T2.1)
+    # ---------------------------------------------------------------
+
+    def _tool_risk_level_for(self, tool_name: str) -> int:
+        """Numeric r-level for a tool, preferring this agent's own registry
+        (authoritative for dynamic/MCP tools and tests), then the static map."""
+        from secops_agent.core.permissions import _risk_class_level, _tool_risk_level
+
+        tool_def = self.registry.get_tool(tool_name) if tool_name else None
+        risk_class = getattr(tool_def, "risk_class", None) if tool_def else None
+        if risk_class is not None:
+            return _risk_class_level(risk_class)
+        return _tool_risk_level(tool_name)
+
+    def _tool_is_active(self, tool_call: ToolCallChunk) -> bool:
+        """True when a tool is 'active' — risk level >= r2 (network observation and
+        up, i.e. beyond passive/r0-r1 recon). This is the plan-preview trigger."""
+        try:
+            return self._tool_risk_level_for(tool_call.name) >= 2
+        except Exception:
+            return False
+
+    def _plan_auto_acknowledges(self) -> bool:
+        """SANDBOX autonomy (from --dangerously-skip-permissions / always-proceed,
+        which print mode also uses) auto-acknowledges the plan: it is still built
+        and emitted for the record, but non-blocking. Execution stays gated by the
+        per-tool PermissionEngine either way."""
+        return getattr(self.autonomy, "level", None) == AutonomyLevel.SANDBOX
+
+    @staticmethod
+    def _plan_risk_label(level: int) -> str:
+        if level >= 5:
+            return "DESTRUCTIVE"
+        if level >= 2:
+            return "ACTIVE"
+        return "recon"
+
+    def _imminent_step_title(self, tool_call: ToolCallChunk) -> str:
+        target = ""
+        for key in ("target", "domain", "url", "host", "ip"):
+            value = (tool_call.arguments or {}).get(key)
+            if value is not None and str(value).strip():
+                target = str(value).strip()
+                break
+        base = tool_call.name or "next action"
+        return f"{base} {target}".strip() if target else base
+
+    def _plan_step_from(self, title: str, tool_name: str) -> PlanStep:
+        level = self._tool_risk_level_for(tool_name) if tool_name else 0
+        active = level >= 2
+        needs_approval = active
+        if tool_name:
+            try:
+                tool_def = self.registry.get_tool(tool_name)
+                dangerous = bool(getattr(tool_def, "dangerous", False)) if tool_def else False
+                needs_approval = (
+                    self.permissions.evaluate_tool(tool_name, dangerous)
+                    != PermissionDecision.ALLOW
+                )
+            except Exception:
+                needs_approval = active
+        return PlanStep(
+            title=title or tool_name or "step",
+            tool_name=tool_name or "",
+            risk_label=self._plan_risk_label(level),
+            active=active,
+            needs_approval=needs_approval,
+            status="planned",
+        )
+
+    def _build_mission_plan(self, mission: Any, imminent: ToolCallChunk) -> MissionPlan:
+        """Build the reviewable trajectory shown before the first active step.
+
+        The imminent (triggering) tool is the lead step; the deterministic
+        planner's ranked proposals follow, deduped by tool name. Each step is
+        labelled recon / ACTIVE / DESTRUCTIVE by risk level and flagged
+        ``needs_approval`` when the per-tool gate would still pause on it.
+        """
+        steps: list[PlanStep] = []
+        seen: set[str] = set()
+
+        def _add(title: str, tool_name: str) -> None:
+            key = (tool_name or title or "").strip().casefold()
+            if not key or key in seen:
+                return
+            seen.add(key)
+            steps.append(self._plan_step_from(title, tool_name))
+
+        _add(self._imminent_step_title(imminent), imminent.name)
+        try:
+            for action in self.planner.plan(mission):
+                _add(action.title, action.tool_name)
+        except Exception:
+            pass
+
+        scope_snapshot = list(getattr(getattr(mission, "scope", None), "in_scope", []) or [])
+        return MissionPlan(steps=steps, scope_snapshot=scope_snapshot, acknowledged=False)
+
+    # ---------------------------------------------------------------
+    # OBSERVE → finding artifacts (audit item #7 / T2.2)
+    # ---------------------------------------------------------------
+
+    @staticmethod
+    def _mission_discovery_snapshot(mission: Any) -> dict[str, set]:
+        """Snapshot the blackboard's finding/service/host keys before OBSERVE, so a
+        post-parse diff yields exactly the newly-added items (dedup by key)."""
+        if mission is None:
+            return {"findings": set(), "services": set(), "hosts": set()}
+        return {
+            "findings": {f.key for f in getattr(mission, "findings", []) or []},
+            "services": {s.key for s in getattr(mission, "services", []) or []},
+            "hosts": {h.ip for h in getattr(mission, "hosts", []) or []},
+        }
+
+    def _new_finding_events(
+        self, mission: Any, snapshot: dict[str, set], source: str
+    ) -> list["FindingEvent"]:
+        """Build a FindingEvent for each blackboard item absent from ``snapshot``."""
+        if mission is None:
+            return []
+        events: list[FindingEvent] = []
+        for finding in getattr(mission, "findings", []) or []:
+            if finding.key in snapshot["findings"]:
+                continue
+            detail_parts = [
+                part for part in (
+                    getattr(finding, "target", ""),
+                    getattr(finding, "category", ""),
+                    "confirmed" if getattr(finding, "confirmed", False) else "",
+                    " ".join(str(getattr(finding, "evidence", "") or "").split())[:400],
+                ) if part
+            ]
+            events.append(FindingEvent(
+                kind="finding",
+                title=getattr(finding, "title", "") or getattr(finding, "category", "") or "finding",
+                detail=" · ".join(detail_parts),
+                severity=getattr(finding, "severity", "info") or "info",
+                source=source,
+            ))
+        for service in getattr(mission, "services", []) or []:
+            if service.key in snapshot["services"]:
+                continue
+            descriptor = " ".join(
+                part for part in (getattr(service, "service", ""), getattr(service, "version", "")) if part
+            ) or "service"
+            events.append(FindingEvent(
+                kind="service",
+                title=f"{descriptor} on {service.host}:{service.port}/{service.protocol}",
+                detail=" · ".join(
+                    part for part in (
+                        getattr(service, "state", ""),
+                        getattr(service, "banner", ""),
+                        ", ".join(getattr(service, "vulns", []) or []),
+                    ) if part
+                ),
+                severity="info",
+                source=source,
+            ))
+        for host in getattr(mission, "hosts", []) or []:
+            if host.ip in snapshot["hosts"]:
+                continue
+            hostname = getattr(host, "hostname", "")
+            events.append(FindingEvent(
+                kind="host",
+                title=f"host {host.ip}" + (f" ({hostname})" if hostname else ""),
+                detail=" · ".join(
+                    part for part in (
+                        getattr(host, "os", ""),
+                        getattr(host, "role", ""),
+                        f"{len(getattr(host, 'services', []) or [])} service(s)",
+                    ) if part
+                ),
+                severity="info",
+                source=source,
+            ))
+        return events
 
     def _start_action_trace(
         self,
@@ -835,6 +1088,12 @@ class SecOpsAgent:
         if mode in {"always-proceed", "proceed-in-sandbox"}:
             self.autonomy = AutonomyPolicy(level=AutonomyLevel.SANDBOX)
             self._autonomy_explicit = True
+        elif mode == "plan":
+            # Plan mode must never inherit a lab/CTF autonomy escalation.  It
+            # still lets the model propose a trajectory, but the runtime mode
+            # installs categorical DENY rules before any candidate can execute.
+            self.autonomy = AutonomyPolicy(level=AutonomyLevel.COPILOT)
+            self._autonomy_explicit = True
         else:
             self.autonomy = AutonomyPolicy()
             self._autonomy_explicit = False
@@ -857,15 +1116,31 @@ class SecOpsAgent:
             return ""
         if not scored:
             return ""
-        lines = ["## Relevant Prior Lessons (hints from past authorized engagements)"]
+        lesson_lines: list[str] = []
         for lesson, _score in scored:
+            # ASI06 (Memory & Context Poisoning): an unreviewed lesson's text is
+            # auto-built from possibly-hostile tool output and never passed through
+            # output_sanitizer. It may still influence retrieval/ranking (retrieve()
+            # returns it), but its raw text must not enter the assembled prompt before
+            # human promotion — exclude it until reviewed (audit R3.4).
+            if not getattr(lesson, "is_reviewed", False):
+                continue
             tool = str(getattr(lesson, "action_tool_name", "") or "").strip()
             suffix = f" [{tool}]" if tool else ""
-            lines.append(f"- {lesson.reason()}{suffix}")
+            lesson_lines.append(f"- {lesson.reason()}{suffix}")
+        if not lesson_lines:
+            return ""
+        lines = ["## Relevant Prior Lessons (hints from past authorized engagements)"]
+        lines.extend(lesson_lines)
         lines.append("Treat these as hints only; verify against current evidence.")
         return "\n".join(lines)
 
     def _tools_schema_for_decision(self, decision: RequestDecision) -> list[dict[str, Any]]:
+        # P4-03: post-exploitation is explicitly outside this product's active
+        # capability. Do not suggest a generic shell/webshell as a substitute;
+        # the remaining workflow is evidence review, remediation, and /report.
+        if self._post_exploitation_boundary_active():
+            return []
         # AutonomyPolicy (§7): withhold exploitation/destructive tool schemas
         # until the user has approved a plan. The PermissionEngine still gates
         # any exposed tool at execution time.
@@ -950,7 +1225,41 @@ class SecOpsAgent:
 
     def _local_preflight_answer(self, user_input: str, decision: RequestDecision) -> str:
         """Return an instant text answer for LOCAL_SYSTEM queries, or empty string."""
-        return self._preflight.local_answer(user_input, decision)
+        text = self._preflight.local_answer(user_input, decision)
+        if text:
+            return text
+        # Same-mission scan reuse: if this deterministic-preflight question targets
+        # a scan the operator already approved and ran earlier this mission, answer
+        # from the cached result instead of re-invoking the tool and re-prompting.
+        return self._cached_scan_answer(user_input)
+
+    def _cached_scan_answer(self, user_input: str) -> str:
+        """Answer a scan-preflight question from a cached, already-approved scan.
+
+        Reads the mission-scoped scan cache (populated ONLY by the result-parser
+        path after a genuine execution). On any miss — no cache, a different
+        target, or a different scope/port range — returns ``""`` so the normal
+        path runs a fresh, approval-gated scan.
+        """
+        mission = getattr(self.structured_memory, "mission", None) if self.structured_memory else None
+        if mission is None or not hasattr(mission, "cached_scan_result"):
+            return ""
+        # _scan_preflight is pure w.r.t. the prompt (no side effects), so we can
+        # compute the would-be scan call here without disturbing suggestion or
+        # attempted-action state that the real preflight turn depends on.
+        for call in self._preflight._scan_preflight(user_input):
+            cached = mission.cached_scan_result(call.name, call.arguments)
+            if cached is None:
+                continue
+            answer = self._format_tool_answer_summary(call.name, call.arguments, cached)
+            if answer:
+                self._trace(
+                    "scan_cache_hit",
+                    tool_name=call.name,
+                    target=str(call.arguments.get("target") or ""),
+                )
+                return answer
+        return ""
 
     def _guided_lab_restraint_turn(self, user_input: str) -> bool:
         """Detect narrow answer turns that should not add follow-up proposals."""
@@ -1646,6 +1955,8 @@ class SecOpsAgent:
                 llm_context["phase_reason"] = getattr(mission, "phase_reason", "")
                 llm_context["findings_count"] = len(mission.findings)
                 llm_context["blocked_reason"] = "; ".join(mission.blocked_reasons[-3:]) if mission.blocked_reasons else ""
+                if self._post_exploitation_boundary_active():
+                    llm_context["post_exploitation_boundary"] = POST_EXPLOITATION_BOUNDARY
             # Inject structured context into system prompt, primed with any
             # relevant prior lessons (memory briefing).
             ctx_str = sm.build_context_for_llm(include_conversation=False)
@@ -1692,6 +2003,7 @@ class SecOpsAgent:
         pending_tool_summary = ""
         previous_iter_signatures: tuple[str, ...] = ()
         repeated_iteration_streak = 0
+        no_observation_streak = 0
         while iteration < self.max_iterations:
             iteration += 1
             tools_were_offered = False
@@ -1939,6 +2251,20 @@ class SecOpsAgent:
                         error=f"Error: Tool '{tc.name}' is not registered.",
                     )
                 else:
+                    boundary_result = self._post_exploitation_guard_result()
+                    if boundary_result is not None:
+                        self._finish_action_trace(
+                            action_trace,
+                            status="blocked",
+                            result=boundary_result,
+                            error=boundary_result.error or "",
+                        )
+                        self.memory.add_tool_result(tc.name, boundary_result.error or "")
+                        yield ToolResultEvent(name=tc.name, result=boundary_result, id=tc.id)
+                        # This is a terminal product boundary, not a transient
+                        # permission denial. Ending the turn prevents a model
+                        # from repeatedly proposing the same unavailable action.
+                        return
                     scope_gate_result = self._scope_gate_tool_call(tc.name, tc.arguments)
                     if scope_gate_result is not None:
                         self._finish_action_trace(
@@ -1952,6 +2278,59 @@ class SecOpsAgent:
                         )
                         yield ToolResultEvent(name=tc.name, result=scope_gate_result, id=tc.id)
                         continue
+
+                    # Plan-preview gate (audit item #7 / T2.1). Before the mission's
+                    # first active (>= r2) step, show the candidate trajectory and take
+                    # a single acknowledgment. This is an added REVIEW gate — the
+                    # per-tool PermissionEngine gates below still run. Placed AFTER the
+                    # scope gate so a scope-denied tool never shows a plan; placed
+                    # BEFORE the permission gates so the plan ack precedes any per-tool
+                    # approval. In SANDBOX/print the plan is emitted but auto-acknowledged
+                    # (non-blocking). A decline aborts the tool like a denied approval.
+                    active_mission = self._mission()
+                    if active_mission is not None and self._tool_is_active(tc):
+                        if not active_mission.plan.acknowledged:
+                            plan = self._build_mission_plan(active_mission, tc)
+                            active_mission.plan = plan
+                            if self._plan_auto_acknowledges():
+                                plan.acknowledged = True
+                                yield PlanPreviewEvent(plan=plan, acknowledgment_future=None)
+                            else:
+                                loop = asyncio.get_running_loop()
+                                ack_future = loop.create_future()
+                                yield PlanPreviewEvent(
+                                    plan=plan, acknowledgment_future=ack_future
+                                )
+                                try:
+                                    ack = await asyncio.wait_for(
+                                        ack_future, timeout=self.approval_timeout
+                                    )
+                                except asyncio.TimeoutError:
+                                    ack = ApprovalDecision(allowed=False)
+                                if not self._coerce_approval(ack).allowed:
+                                    error = (
+                                        "Mission plan not acknowledged; aborting before "
+                                        "the first active step."
+                                    )
+                                    res = ToolResult(success=False, output="", error=error)
+                                    self._finish_action_trace(
+                                        action_trace,
+                                        status="denied",
+                                        result=res,
+                                        error=error,
+                                    )
+                                    self.memory.add_tool_result(tc.name, error)
+                                    yield ToolResultEvent(name=tc.name, result=res, id=tc.id)
+                                    continue
+                                plan.acknowledged = True
+                        elif not any(
+                            step.tool_name == tc.name for step in active_mission.plan.steps
+                        ):
+                            if active_mission.record_divergence(tc.name):
+                                yield PlanDivergenceEvent(
+                                    tool_name=tc.name,
+                                    reason="active step not in the acknowledged plan",
+                                )
 
                     sudo_command_candidate = ""
                     if tc.name == "connect_vpn_config" and str(
@@ -1984,8 +2363,23 @@ class SecOpsAgent:
                             command_text=sudo_command_candidate,
                         )
                     else:
-                        permission = self.permissions.evaluate_tool(tc.name, tool_def.dangerous)
-                        resource = self.permissions.tool_resource(tc.name)
+                        # Argument-level hard DENY (write_file to /etc, read of
+                        # /etc/shadow, …) is categorical: evaluate it BEFORE the
+                        # tool-level prompt so the operator can never approve past a
+                        # system-path write. Only DENY short-circuits here; ASK/ALLOW
+                        # defer to the tool-level gate (and, for passive read tools,
+                        # the per-path argument gate below) (audit R3.5).
+                        arg_decision, arg_resource = (
+                            self.permissions.evaluate_tool_argument_resource(
+                                tc.name, tc.arguments
+                            )
+                        )
+                        if arg_resource is not None and arg_decision == PermissionDecision.DENY:
+                            permission = PermissionDecision.DENY
+                            resource = arg_resource
+                        else:
+                            permission = self.permissions.evaluate_tool(tc.name, tool_def.dangerous)
+                            resource = self.permissions.tool_resource(tc.name)
                     if action_trace is not None:
                         action_trace.permission = permission.value
 
@@ -2411,10 +2805,19 @@ class SecOpsAgent:
                 pending_suggestions: list[NextAction] = []
                 parsed_result: Any | None = None
                 state_changes: list[str] = []
+                produced_new_observation = False
                 experience_recorded = False
                 action_trace_finished = False
                 # Phase 2: parse tool results into structured data
                 if self.result_parser and res.success and res.output:
+                    # Part B (audit item #7 / T2.2): snapshot the blackboard BEFORE
+                    # parse so the post-integration diff yields exactly the new items
+                    # to surface as finding artifacts (deduped by mission key).
+                    observe_mission = (
+                        getattr(self.structured_memory, "mission", None)
+                        if self.structured_memory else None
+                    )
+                    discovery_snapshot = self._mission_discovery_snapshot(observe_mission)
                     try:
                         parsed = self.result_parser.parse(
                             tc.name, res.output, tc.arguments
@@ -2424,12 +2827,22 @@ class SecOpsAgent:
                         if self.structured_memory and hasattr(self.structured_memory, "knowledge"):
                             changes = self.structured_memory.knowledge.integrate(parsed)
                             state_changes = list(changes)
+                            produced_new_observation = bool(state_changes) or any(
+                                bool(getattr(parsed, field, None))
+                                for field in ("findings", "hosts_discovered", "services_discovered")
+                            )
                             if hasattr(self.structured_memory, "sync_to_mission"):
                                 self.structured_memory.sync_to_mission()
                             # Auto-advance mission phase based on new evidence
                             _sm_mission = getattr(self.structured_memory, "mission", None)
                             if _sm_mission and hasattr(_sm_mission, "refresh_phase_from_state"):
                                 _sm_mission.refresh_phase_from_state()
+                            # Surface each newly-added blackboard item as a finding
+                            # artifact, live at discovery time.
+                            for finding_event in self._new_finding_events(
+                                observe_mission, discovery_snapshot, tc.name
+                            ):
+                                yield finding_event
                             self._record_experience_lesson(
                                 tc.name,
                                 tc.arguments,
@@ -2521,6 +2934,24 @@ class SecOpsAgent:
                     if tool_answer:
                         pending_tool_summary = tool_answer
                 yield ToolResultEvent(name=tc.name, result=res, id=tc.id)
+                # A changing call signature is not necessarily progress.  Stop a
+                # chained ReAct turn after three successful observations that add
+                # no structured state, rather than burning the iteration budget on
+                # A/B tool alternation or minor argument jitter.
+                if res.success and parsed_result is not None:
+                    if produced_new_observation:
+                        no_observation_streak = 0
+                    else:
+                        no_observation_streak += 1
+                    if no_observation_streak >= 3:
+                        stall_msg = (
+                            "I stopped the tool loop after three successful actions "
+                            "produced no new structured observations. A different "
+                            "target, scope, or approach is needed."
+                        )
+                        self.memory.add_assistant_message(stall_msg)
+                        yield TextEvent(content=stall_msg)
+                        return
                 if local_preflight_turn and res.success:
                     answer_summary = self._format_tool_answer_summary(
                         tc.name,

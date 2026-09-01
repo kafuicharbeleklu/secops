@@ -146,13 +146,27 @@ Choix assumé : **planificateur déterministe + LLM arbitre**, pas « LLM pur »
 - **Reranking CBR** : `evaluate_lesson_match` ajuste les priorités selon le
   vécu (compatibilité service / endpoint / risk / access).
 
-**À formaliser :** un objet `Plan` de première classe (liste ordonnée de
-`NextAction` + justification + budget), **persisté dans `MissionContext`**
-plutôt que recalculé et jeté à chaque tour. Bénéfice : le plan devient
-**inspectable dans le TUI** via `/plan` — très « agy ».
+**Réalisé (chantier 5, 2026-07-15) :** un objet `Plan` de première classe —
+`MissionPlan` / `PlanStep` (`core/mission.py`), **persisté dans `MissionContext`**
+plutôt que recalculé et jeté à chaque tour. Un *gate de prévisualisation* affiche la
+trajectoire candidate avant la première étape **active (≥ r2)** et prend un accusé
+unique (`PlanPreviewEvent` / `PlanDivergenceEvent`, `core/agent.py`) sans jamais
+remplacer le `PermissionEngine` (l'invariant de séparation des pouvoirs tient : le gate
+est une *revue* ajoutée, l'autorisation par outil s'applique toujours ensuite). Le plan
+est **inspectable dans le TUI** via `/plan [scope <cible>]` (`render_plan`) — très « agy ».
+En SANDBOX / `--print` il est émis mais auto-acquitté (non bloquant).
 
 Lien phase ↔ outils : chaque `NextAction` est liée à une `ToolCategory` /
 `ToolRiskClass` ; le planner ne propose pas d'exploitation en phase recon.
+
+**Limite de produit — post-exploitation non intrusive :** dès que le
+blackboard enregistre un accès ou des identifiants et atteint
+`POST_EXPLOITATION`, SecOps Agent n'expose plus de schéma d'outil et bloque de
+façon centrale tout appel résiduel, même s'il est émis directement par le
+modèle. Cette phase sert uniquement à préserver les preuves déjà collectées,
+documenter impact et remédiation, puis générer `/report`. Ce n'est pas une
+porte d'autorisation supplémentaire ni une promesse de post-exploitation
+automatisée.
 
 ---
 
@@ -268,12 +282,14 @@ de l'**explicitation** et de la **découpe**. Ordre recommandé :
 > Principe : **0 et 1 avant tout refactor** ; ensuite, un chantier à la fois,
 > tests verts entre chaque.
 
-> **État (2026-06-29) :** chantiers 0, 1, 2, 4 **faits** (historique git en place ;
-> ruff + suite unittest ; `AutonomyPolicy` extraite **et câblée** ; briefing de
+> **État (2026-06-29, maj 2026-07-15) :** chantiers 0, 1, 2, 4 **faits** (historique git
+> en place ; ruff + suite unittest ; `AutonomyPolicy` extraite **et câblée** ; briefing de
 > mission ; **6** : `result_parser` scindé en package `core/result_parsers/`
 > base+familles, façade conservée ; **3** : boucle ReAct extraite dans
-> `_run_mission_loop`, `stream_response` = délégateur fin). **Restent :** 5 (`Plan` +
-> `/plan`), 7 (découpe `renderer`). La validation humaine des leçons (§5.2) est
+> `_run_mission_loop`, `stream_response` = délégateur fin ; **5** : objet `Plan` de
+> première classe (`MissionPlan`) + gate de prévisualisation + `/plan`, et `/artifact`
+> comme surface primaire des findings (`FindingEvent` en OBSERVE) — 2026-07-15).
+> **Restent :** 7 (découpe `renderer`). La validation humaine des leçons (§5.2) est
 > livrée via `/lessons` (`cli/lessons.py` + `ExperienceStore.review_lesson`).
 
 ### Décisions de parité TUI actées
@@ -296,8 +312,13 @@ de l'**explicitation** et de la **découpe**. Ordre recommandé :
 `risk_based` (défaut) / `supervised` / `sandbox`), avec :
 - `exposes_tool_schemas(decision)` — **fait** : les schémas d'outils
   exploitation/destructifs sont retenus tant que l'utilisateur n'a pas approuvé
-  un plan (sauf en sandbox). Câblé dans `agent._tools_schema_for_decision` ;
-  résout `test_exploit_request_sends_no_function_tools_by_default`.
+  un plan (sauf en sandbox). Câblé dans `agent._tools_schema_for_decision`, qui
+  expose **toujours** le plancher de base sûr (jamais un schéma vide) tout en
+  retenant les primitives offensives ; vérifié par
+  `tests/test_request_routing.py::test_unapproved_exploit_exposes_safe_baseline_not_offensive_primitives`
+  (et `test_vague_request_exposes_safe_baseline_instead_of_nothing`). L'ancien
+  `test_exploit_request_sends_no_function_tools_by_default` n'existe plus (le
+  design a évolué de « n'envoyer aucun outil » vers « exposer le plancher sûr »).
 - `pauses_for(risk)` — **fait et câblé** : `allow_llm_chaining` (`agent.py` ~1536)
   consulte `pauses_for` pour décider du chaînage multi-étapes ; les chaînes
   recon→enum à faible risque s'enchaînent dans un tour, le high-risk met en pause.

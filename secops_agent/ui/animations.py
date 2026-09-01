@@ -14,7 +14,7 @@ from typing import Any
 from rich.console import Console
 from rich.status import Status
 
-from secops_agent.ui.theme import COLORS
+from secops_agent.ui.theme import COLORS, reduced_motion
 
 __all__ = [
     "ThinkingSpinner",
@@ -50,6 +50,20 @@ def wait_tip_for_elapsed(elapsed: float, *, offset: int = 0) -> str:
     return WAIT_TIPS[(index + offset) % len(WAIT_TIPS)]
 
 
+_WAIT_WARM_SECONDS = 10.0
+_WAIT_URGENT_SECONDS = 30.0
+
+
+def wait_urgency_color(elapsed: float) -> str:
+    """ANIM-03: the wait indicator warms with elapsed time so a long turn reads
+    as 'still working' - muted under ~10s, amber past it, gold past ~30s."""
+    if elapsed >= _WAIT_URGENT_SECONDS:
+        return COLORS["accent"]
+    if elapsed >= _WAIT_WARM_SECONDS:
+        return COLORS["warning"]
+    return COLORS["text_muted"]
+
+
 def format_wait_message(
     message: str,
     elapsed: float,
@@ -57,11 +71,12 @@ def format_wait_message(
     include_tip: bool = True,
     offset: int = 0,
 ) -> str:
+    color = wait_urgency_color(elapsed)
     if not include_tip or elapsed < _TIP_DELAY_SECONDS:
-        return f"[{COLORS['text_muted']}]{message}[/{COLORS['text_muted']}]"
+        return f"[{color}]{message}[/{color}]"
     tip = wait_tip_for_elapsed(elapsed, offset=offset)
     return (
-        f"[{COLORS['text_muted']}]{message}[/{COLORS['text_muted']}]\n"
+        f"[{color}]{message}[/{color}]\n"
         f"[{COLORS['text_dim']}]└ Tip: {tip}[/{COLORS['text_dim']}]"
     )
 
@@ -125,6 +140,15 @@ def extract_thought_summary(thought_text: str) -> str:
     return last_s
 
 
+def _spinner_name() -> str:
+    """Static (no rotating glyph) under reduced motion, else the agy spinner."""
+    return "none" if reduced_motion() else "agy_dots"
+
+
+def _spinner_refresh() -> int:
+    return 2 if reduced_motion() else 12
+
+
 class ThinkingSpinner:
     """Simple 'Thinking...' spinner matching Antigravity CLI exactly."""
 
@@ -144,9 +168,9 @@ class ThinkingSpinner:
         self._start_time = time.monotonic()
         self._status = Status(
             self._status_message(0.0),
-            spinner="agy_dots",
+            spinner=_spinner_name(),
             spinner_style=COLORS["accent"],
-            refresh_per_second=12,
+            refresh_per_second=_spinner_refresh(),
             console=self._console,
         )
         self._status.start()
@@ -225,6 +249,26 @@ def _tool_display_name(tool_name: str) -> str:
     return names.get(tool_name, tool_name.replace("_", " ").title())
 
 
+def _render_progress_bar(percent: float, width: int = 12) -> str:
+    """Render a compact determinate progress bar as Rich markup (ANIM-01).
+
+    Shown on the tool spinner when a ``ToolProgressEvent`` carries a percentage
+    (nmap ports, gobuster/ffuf requests, VPN handshake).  Tools that report no
+    percentage keep the indeterminate spinner unchanged — the caller only calls
+    this when ``percent is not None``.  Filled cells use the accent colour while
+    running and the success colour at completion; the remainder stays dim.
+    """
+    pct = max(0.0, min(100.0, float(percent)))
+    width = max(1, int(width))
+    filled = max(0, min(width, int(round((pct / 100.0) * width))))
+    fill_color = COLORS["success"] if pct >= 100.0 else COLORS["accent"]
+    return (
+        f"[{fill_color}]{'━' * filled}[/]"
+        f"[{COLORS['text_dim']}]{'━' * (width - filled)}[/] "
+        f"{pct:.0f}%"
+    )
+
+
 class ToolExecutionSpinner:
     """Spinner shown during tool execution with live elapsed timer."""
 
@@ -249,9 +293,9 @@ class ToolExecutionSpinner:
         self._start_time = time.monotonic()
         self._status = Status(
             self._format_message(0.0),
-            spinner="agy_dots",
+            spinner=_spinner_name(),
             spinner_style=COLORS["accent"],
-            refresh_per_second=12,
+            refresh_per_second=_spinner_refresh(),
             console=self._console,
         )
         self._status.start()
@@ -277,7 +321,7 @@ class ToolExecutionSpinner:
             if self._detail:
                 phase_str += f" · {self._detail}"
             if self._percent is not None:
-                phase_str += f" · {self._percent:.0f}%"
+                phase_str += f" · {_render_progress_bar(self._percent)}"
         else:
             phase_str = ""
 

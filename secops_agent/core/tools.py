@@ -55,6 +55,12 @@ class ToolRiskClass(str, Enum):
     LOCAL_FILE_ACCESS = "r4_local_file_access"
     PRIVILEGED_LOCAL_ACTION = "r5_privileged_local_action"
     OFFENSIVE_PAYLOAD_OR_EXPLOIT_ASSISTANCE = "r6_offensive_payload_or_exploit_assistance"
+    # r7/r8 are RESERVED — defined but intentionally assigned to zero built-in tools.
+    # r7 (extension/MCP/skill execution) is gated out-of-band by MCP `trust_status` +
+    # server_hash and skill content-hashing, not by a static risk_class here; r8
+    # (credentialed remote / identity action) has no built-in tool yet — a future
+    # remote-auth tool should carry it. Both still count toward the r5+ high-risk floor
+    # (see permissions._HIGH_RISK_RULE_FLOOR). Do not treat their emptiness as a bug.
     EXTENSION_SUPPLY_CHAIN_EXECUTION = "r7_extension_supply_chain_execution"
     CREDENTIALED_REMOTE_OR_IDENTITY_ACTION = "r8_credentialed_remote_or_identity_action"
 

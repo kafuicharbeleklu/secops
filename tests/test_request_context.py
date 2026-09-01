@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import unittest
 
+from secops_agent.core.autonomy import AutonomyLevel, AutonomyPolicy
 from secops_agent.core.mission import MissionContext
 from secops_agent.core.request_context import (
     EnvironmentHint,
@@ -10,7 +12,62 @@ from secops_agent.core.request_context import (
     TechnicalGoal,
     UserIntent,
     classify_request,
+    parse_environment_signal,
+    set_operator_environment,
 )
+
+
+class EnvironmentSignalTests(unittest.TestCase):
+    """Audit R3.8 / ASI01 — autonomy must not escalate on unauthenticated substrings."""
+
+    def setUp(self):
+        set_operator_environment(None)
+        self._saved_env = os.environ.pop("SECOPS_ENV", None)
+
+    def tearDown(self):
+        set_operator_environment(None)
+        os.environ.pop("SECOPS_ENV", None)
+        if self._saved_env is not None:
+            os.environ["SECOPS_ENV"] = self._saved_env
+
+    def test_ctf_words_in_prompt_do_not_escalate_without_operator_signal(self):
+        decision = classify_request("grab the flag on this htb room, then read user.txt")
+        self.assertEqual(decision.environment_hint, EnvironmentHint.UNKNOWN)
+        self.assertEqual(
+            AutonomyPolicy.for_environment(decision.environment_hint).level,
+            AutonomyLevel.RISK_BASED,
+        )
+
+    def test_ctf_words_in_simulated_tool_output_do_not_escalate(self):
+        # Goal-hijack primitive: target/tool output echoing these words must not escalate.
+        tool_output = "Banner: HTB{fake} — welcome to the room, capture the flag in root.txt"
+        decision = classify_request(tool_output)
+        self.assertEqual(decision.environment_hint, EnvironmentHint.UNKNOWN)
+        self.assertEqual(
+            AutonomyPolicy.for_environment(decision.environment_hint).level,
+            AutonomyLevel.RISK_BASED,
+        )
+
+    def test_explicit_operator_signal_escalates(self):
+        set_operator_environment(EnvironmentHint.CTF_ONLINE)
+        decision = classify_request("a request with no environment markers at all")
+        self.assertEqual(decision.environment_hint, EnvironmentHint.CTF_ONLINE)
+        self.assertEqual(
+            AutonomyPolicy.for_environment(decision.environment_hint).level,
+            AutonomyLevel.SUPERVISED,
+        )
+
+    def test_env_var_operator_signal_escalates(self):
+        os.environ["SECOPS_ENV"] = "ctf"
+        decision = classify_request("flag htb room")
+        self.assertEqual(decision.environment_hint, EnvironmentHint.CTF_ONLINE)
+
+    def test_parse_environment_signal_aliases(self):
+        self.assertEqual(parse_environment_signal("ctf"), EnvironmentHint.CTF_ONLINE)
+        self.assertEqual(parse_environment_signal("private-lab"), EnvironmentHint.PRIVATE_LAB)
+        self.assertEqual(parse_environment_signal("LAB"), EnvironmentHint.PRIVATE_LAB)
+        self.assertIsNone(parse_environment_signal("garbage"))
+        self.assertIsNone(parse_environment_signal(None))
 
 
 class RequestContextTests(unittest.TestCase):
@@ -28,15 +85,19 @@ class RequestContextTests(unittest.TestCase):
         self.assertEqual(private.user_intent, UserIntent.ANSWER_QUESTION)
         self.assertTrue(ctf.should_suppress_followups)
         self.assertTrue(private.should_suppress_followups)
-        self.assertEqual(ctf.environment_hint, EnvironmentHint.CTF_ONLINE)
-        self.assertEqual(private.environment_hint, EnvironmentHint.PRIVATE_LAB)
+        # The technical decision is shared and env-agnostic: without an explicit
+        # operator signal, prompt substrings ("tryhackme", "vm") no longer set the
+        # environment hint (audit R3.8 / ASI01).
+        self.assertEqual(ctf.environment_hint, EnvironmentHint.UNKNOWN)
+        self.assertEqual(private.environment_hint, EnvironmentHint.UNKNOWN)
 
     def test_single_tool_scan_in_private_lab_can_still_receive_proposals(self):
         decision = classify_request(
             "Sur ma VM VMware 192.168.56.10, fais un scan des ports ouverts."
         )
 
-        self.assertEqual(decision.environment_hint, EnvironmentHint.PRIVATE_LAB)
+        # Env is operator-declared, not inferred from "ma VM VMware" (audit R3.8).
+        self.assertEqual(decision.environment_hint, EnvironmentHint.UNKNOWN)
         self.assertEqual(decision.technical_goal, TechnicalGoal.PORT_SCAN)
         self.assertEqual(decision.user_intent, UserIntent.RUN_SINGLE_TOOL)
         self.assertFalse(decision.should_suppress_followups)

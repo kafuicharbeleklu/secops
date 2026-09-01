@@ -59,7 +59,7 @@ Pre-TUI CLI entrypoints:
 - `--print-timeout <seconds>` changes the non-interactive prompt timeout.
 - `--prompt-interactive` / `-i <text>` runs an initial prompt, then keeps the interactive session open.
 - `--sandbox` enables restricted terminal command execution from startup.
-- `--permission-mode request-review|proceed-in-sandbox|always-proceed|strict` selects the initial approval policy.
+- `--permission-mode plan|request-review|proceed-in-sandbox|always-proceed|strict` selects the initial approval policy. `plan` renders proposed active steps but denies every tool and shell execution for the session.
 - `--dangerously-skip-permissions` auto-approves tools and shell commands for the current session; use only on authorized targets.
 - `--add-dir <path>` adds an extra workspace directory before the TUI starts.
 - `--log-file <path>` overrides the CLI log file path.
@@ -150,12 +150,14 @@ Tasks and sessions:
 /resume
 /rewind
 /export <name>
+/report [name]
 /lessons [list|review <id> <reviewed|blocked|deprecated> [note]]
 ```
 
 Evidence review:
 
 ```text
+/plan [scope <target>]
 /artifact [id|list]
 /attach <path> [note]
 ```
@@ -172,7 +174,7 @@ Extensions and workspace:
 
 ## Tools And Safety
 
-Tools are registered by category in `secops_agent/tools/`. Dangerous actions such as `nmap_scan`, `dir_brute`, `nikto_scan`, `sql_injection_test`, `xss_test`, `waf_detect`, `generate_payload`, `run_shell`, `connect_vpn_config`, `disconnect_vpn`, `ffuf_scan`, `nuclei_scan`, `start_listener`, `write_file`, `webshell_exec`, and `http_request` require approval unless a session rule allows them.
+Tools are registered by category in `secops_agent/tools/`. Dangerous actions such as `nmap_scan`, `subdomain_enum`, `dir_brute`, `nikto_scan`, `sql_injection_test`, `xss_test`, `waf_detect`, `generate_payload`, `run_shell`, `connect_vpn_config`, `disconnect_vpn`, `ffuf_scan`, `nuclei_scan`, `start_listener`, `write_file`, `webshell_exec`, and `http_request` require approval unless a session rule allows them. Active-enumeration scans (`nmap_scan`, `subdomain_enum`, r3) route through approval before they touch a real target — their permission tier tracks their `risk_class`, not a laxer default.
 
 Example permission rules:
 
@@ -180,6 +182,12 @@ Example permission rules:
 /permissions allow tool(nmap_scan)
 /permissions deny tool(run_shell)
 /permissions clear
+```
+
+Granting a *blanket allow* on a privileged/exploit tool (r5+, e.g. `run_shell`) or a compound command needs an explicit second confirmation, so the CLI can't silently widen the approval UI's safety posture:
+
+```text
+/permissions allow tool(run_shell) confirm
 ```
 
 Only run scan and exploitation tools against systems you are authorized to test.

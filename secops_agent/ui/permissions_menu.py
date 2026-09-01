@@ -10,6 +10,7 @@ from secops_agent.ui.overlay import OverlayChoice, choose_overlay
 
 
 PERMISSION_MODES: tuple[tuple[str, str], ...] = (
+    ("plan", "Build and review a plan; deny every tool and shell execution"),
     ("request-review", "Prompt for write, bash, and web tools"),
     ("proceed-in-sandbox", "Auto-approve terminal commands in sandbox"),
     ("always-proceed", "Auto-approve all tools"),

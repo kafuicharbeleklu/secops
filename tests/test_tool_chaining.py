@@ -6,6 +6,7 @@ from pathlib import Path
 
 from secops_agent.core.agent import (
     ApprovalRequestEvent,
+    PlanPreviewEvent,
     SecOpsAgent,
     SuggestedActionsEvent,
     TextEvent,
@@ -17,6 +18,7 @@ from secops_agent.core.experience import ExperienceStore
 from secops_agent.core.llm import Message, StreamChunk, ToolCallChunk
 from secops_agent.core.memory import ConversationMemory
 from secops_agent.core.mission import MissionContext, Service
+from secops_agent.core.request_context import EnvironmentHint, set_operator_environment
 from secops_agent.core.permissions import (
     ApprovalDecision,
     PermissionDecision,
@@ -99,10 +101,67 @@ async def _collect_events(
         events.append(event)
         if isinstance(event, ApprovalRequestEvent):
             event.approval_future.set_result(approval or ApprovalDecision(allowed=False))
+        elif isinstance(event, PlanPreviewEvent) and event.acknowledgment_future is not None:
+            event.acknowledgment_future.set_result(True)
     return events
 
 
 class ToolChainingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_alternating_calls_stop_after_three_empty_observations(self):
+        """Convergence must track blackboard progress, not only call identity."""
+        registry = ToolRegistry()
+        executed: list[str] = []
+
+        for name, output in (
+            ("hash_generate", "🔑 Hash Generation for: 'x'\n\n  SHA256: abcdef0123456789"),
+            ("hash_identify", "🔐 Hash Analysis\n  Length: 64 chars\n  Possible types:\n    • SHA-256"),
+            ("sysinfo", "🖥️ System Information\n\n  Hostname: test-host"),
+        ):
+            async def tool(*, _name=name, _output=output, **_kwargs):
+                executed.append(_name)
+                return _output
+
+            registry.register(
+                name=name,
+                description=name,
+                category=ToolCategory.CRYPTO,
+                parameters={},
+                func=tool,
+                dangerous=False,
+            )
+
+        class AlternatingLLM(ChainFakeLLM):
+            def __init__(self):
+                super().__init__()
+                self.names = ["hash_generate", "hash_identify", "sysinfo", "hash_generate"]
+
+            async def stream_chat(self, messages, tools_schema=None):
+                self.calls += 1
+                if self.calls <= len(self.names):
+                    yield StreamChunk(
+                        tool_call=ToolCallChunk(
+                            name=self.names[self.calls - 1], arguments={}, id=f"call_{self.calls}"
+                        )
+                    )
+                    return
+                yield StreamChunk(content="done")
+
+        memory = ConversationMemory()
+        mission = MissionContext(name="no progress")
+        agent = SecOpsAgent(
+            llm=AlternatingLLM(), registry=registry, memory=memory,
+            permissions=PermissionEngine(),
+            structured_memory=StructuredMemory(conversation=memory, mission=mission),
+            result_parser=ToolResultParser(mission=mission), max_iterations=8,
+        )
+
+        events = await _collect_events(agent, "enumerate the authorized lab")
+        self.assertEqual(executed, ["hash_generate", "hash_identify", "sysinfo"])
+        self.assertTrue(any(
+            isinstance(event, TextEvent) and "three successful actions" in event.content
+            for event in events
+        ))
+
     def _proposal_agent(self, *, allow_dir_brute: bool = False, experience_store=None):
         executed: list[str] = []
         registry = ToolRegistry()
@@ -697,7 +756,9 @@ Find directories on the web server using the GoBuster tool.
 What is the hidden directory?
 """
 
-        first_events = await _collect_events(agent, prompt)
+        # nmap_scan is r3 active enumeration: it now routes through approval before it
+        # hits the real target (audit T2.7), consistent with dir_brute below.
+        first_events = await _collect_events(agent, prompt, approval=ApprovalDecision(allowed=True))
         calls_before = llm.calls
         next_events = await _collect_events(
             agent,
@@ -711,6 +772,10 @@ What is the hidden directory?
         self.assertEqual(
             [(event.name, event.arguments) for event in first_events if isinstance(event, ToolCallEvent)],
             [("nmap_scan", {"target": "10.10.10.5", "scan_type": "version"})],
+        )
+        self.assertEqual(
+            [event.tool_name for event in first_events if isinstance(event, ApprovalRequestEvent)],
+            ["nmap_scan"],
         )
         self.assertEqual(
             [(event.name, event.arguments) for event in next_events if isinstance(event, ToolCallEvent)],
@@ -735,6 +800,11 @@ What is the hidden directory?
         self.assertIn("/panel", next_text)
 
     async def test_private_virtual_lab_question_is_focused_without_ctf_classification(self):
+        # The operator declared a private lab (--env lab / SECOPS_ENV=lab). Autonomy
+        # escalation is earned on that explicit signal, not on "VM VirtualBox" text
+        # in the prompt (audit R3.8 / ASI01).
+        set_operator_environment(EnvironmentHint.PRIVATE_LAB)
+        self.addCleanup(set_operator_environment, None)
         executed: list[str] = []
         registry = ToolRegistry()
 
@@ -799,6 +869,10 @@ What is the hidden directory?
         self.assertTrue(llm.last_context["focused_answer_turn"])
 
     async def test_private_virtual_lab_single_scan_keeps_next_action_proposals(self):
+        # Private lab declared by the operator (--env lab), not inferred from prompt
+        # text — autonomy is earned on the explicit signal (audit R3.8 / ASI01).
+        set_operator_environment(EnvironmentHint.PRIVATE_LAB)
+        self.addCleanup(set_operator_environment, None)
         agent, executed, llm = self._proposal_agent()
 
         events = await _collect_events(

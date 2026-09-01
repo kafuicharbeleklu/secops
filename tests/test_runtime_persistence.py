@@ -253,6 +253,8 @@ class RuntimePersistenceTests(unittest.TestCase):
             with (
                 patch("secops_agent.main.settings", session_settings),
                 patch("secops_agent.core.memory.settings", session_settings),
+                patch("sys.stdin.isatty", return_value=False),
+                patch("sys.stdout.isatty", return_value=False),
             ):
                 _autosave_agent_session(source_agent, source_runtime, "restorable")
                 asyncio.run(

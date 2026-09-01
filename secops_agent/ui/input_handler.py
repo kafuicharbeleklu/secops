@@ -1029,6 +1029,24 @@ class InputHandler:
             """Open the latest generated artifact."""
             event.app.exit(result=self.ARTIFACT_REVIEW_REQUEST)
 
+        @self.bindings.add("s-tab")
+        def _cycle_permission_mode_binding(event):
+            """PROC-02: Shift+Tab cycles the permission mode (when not completing)."""
+            buf = event.app.current_buffer
+            if buf.complete_state is not None:
+                buf.complete_previous()
+                return
+            cycler = self._permission_mode_cycler
+            if cycler is None:
+                return
+            try:
+                payload = cycler()
+            except Exception:
+                return
+            if isinstance(payload, dict):
+                self._statusline.update(payload)
+            event.app.invalidate()
+
         self.session = CompactPromptSession(
             history=_build_history(),
             completer=SlashCommandCompleter(),
@@ -1044,6 +1062,7 @@ class InputHandler:
         self._memory = None
         self._runtime = None
         self._console = None
+        self._permission_mode_cycler = None
         self._statusline = {
             "cwd": "",
             "tokens": 0,
@@ -1066,6 +1085,7 @@ class InputHandler:
         console: Optional[Any] = None,
         runtime: Optional[Any] = None,
         statusline: Optional[dict[str, Any]] = None,
+        permission_cycler: Optional[Any] = None,
         **_,
     ):
         if model_name:
@@ -1079,20 +1099,23 @@ class InputHandler:
             self._console = console
         if statusline:
             self._statusline.update(statusline)
+        if permission_cycler is not None:
+            self._permission_mode_cycler = permission_cycler
 
     def _build_statusline(self, width: int, completion_mode: bool = False) -> str:
+        status = getattr(self, "_statusline", {})
         friendly = friendly_model_name(self._model_name or "gemini-2.5-flash")
-        cwd = self._statusline.get("cwd") or os.getcwd().replace(os.path.expanduser("~"), "~")
-        tokens = int(self._statusline.get("tokens") or 0)
-        tasks = int(self._statusline.get("tasks") or 0)
-        dirs_count = int(self._statusline.get("dirs") or 0)
-        tools = int(self._statusline.get("tools") or 0)
-        profile = str(self._statusline.get("profile") or "standard")
-        state = str(self._statusline.get("state") or "idle")
-        sandbox = "sandbox" if self._statusline.get("sandbox") else "no sandbox"
-        permissions = str(self._statusline.get("permissions") or "default")
-        autonomy = str(self._statusline.get("autonomy") or "")
-        phase = str(self._statusline.get("phase") or "")
+        cwd = status.get("cwd") or os.getcwd().replace(os.path.expanduser("~"), "~")
+        tokens = int(status.get("tokens") or 0)
+        tasks = int(status.get("tasks") or 0)
+        dirs_count = int(status.get("dirs") or 0)
+        tools = int(status.get("tools") or 0)
+        profile = str(status.get("profile") or "standard")
+        state = str(status.get("state") or "idle")
+        sandbox = "sandbox" if status.get("sandbox") else "no sandbox"
+        permissions = str(status.get("permissions") or "default")
+        autonomy = str(status.get("autonomy") or "")
+        phase = str(status.get("phase") or "")
         posture_seg = f"auto:{autonomy}" if autonomy else ""
         phase_seg = f"phase:{phase}" if phase else ""
 
@@ -1202,15 +1225,13 @@ class InputHandler:
             result.extend(line2)
             return result
         else:
-            left_text = "? for shortcuts"
-            model_name = friendly_model_name(self._model_name or "gemini-2.5-flash")
-            left_text, spaces, model_text = _footer_parts(left_text, model_name, width)
-
+            # Keep the execution context on screen: the former minimal footer
+            # hid permission mode, sandbox state and current phase behind the
+            # /statusline overlay precisely while an operator needed them.
+            statusline = self._build_statusline(width)
             return [
                 ("class:prompt_border", _prompt_separator(width) + "\n"),
-                ("class:toolbar_left", left_text),
-                ("class:toolbar_spaces", spaces),
-                ("class:toolbar_right", model_text),
+                ("class:toolbar_left", statusline),
             ]
 
     def _prompt_fragments(self):

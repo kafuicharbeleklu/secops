@@ -41,7 +41,7 @@ from rich.markup import escape
 from rich.padding import Padding
 
 from secops_agent import __version__
-from secops_agent.ui.theme import rich_theme, COLORS, friendly_model_name
+from secops_agent.ui.theme import rich_theme, COLORS, friendly_model_name, reduced_motion
 from secops_agent.ui.commands import iter_commands
 from secops_agent.ui.animations import ThinkingSpinner, ToolExecutionSpinner
 from secops_agent.ui.overlay import OverlayRow, build_choice_overlay_lines, read_terminal_key, render_overlay
@@ -58,6 +58,7 @@ from secops_agent.core.agent import (
     AgentEvent, ThinkingEvent, TextEvent,
     ToolCallEvent, ToolStartEvent, ToolProgressEvent, ToolResultEvent, ErrorEvent, StatusEvent,
     ApprovalRequestEvent, SudoAuthenticationRequestEvent, TokenUsageEvent, SuggestedActionsEvent,
+    PlanPreviewEvent, PlanDivergenceEvent,
 )
 from secops_agent.core.tools import ToolResult
 from secops_agent.ui.sudo_prompt import request_sudo_authentication
@@ -908,6 +909,14 @@ async def _interruptible_events(
         next_task = asyncio.create_task(iterator.__anext__())
 
 
+def _osc_progress_sequence(percent: float | None) -> str:
+    """OSC 9;4 sequence (ANIM-02): state 1 (normal) at ``percent``, or clear."""
+    if percent is None:
+        return "\x1b]9;4;0;0\x07"
+    pct = max(0, min(100, int(round(percent))))
+    return f"\x1b]9;4;1;{pct}\x07"
+
+
 class Renderer:
     """Antigravity-style terminal renderer."""
 
@@ -1611,7 +1620,7 @@ class Renderer:
         return [
             SettingsItem("Response Profile", "fast" if runtime.fast_mode else "standard", "Fast profile lowers loop count and restores standard reasoning when off", editable=True, options=("standard", "fast")),
             SettingsItem("Model", friendly_model_name(model), "Active model profile for assistant responses", editable=True, options=model_options),
-            SettingsItem("Tool Permission", runtime.permission_mode, "Approval mode for tools and terminal commands", editable=True, options=("request-review", "proceed-in-sandbox", "always-proceed", "strict")),
+            SettingsItem("Tool Permission", runtime.permission_mode, "Approval mode for tools and terminal commands", editable=True, options=("plan", "request-review", "proceed-in-sandbox", "always-proceed", "strict")),
             SettingsItem("Sandbox Mode", "on" if runtime.sandbox_enabled else "off", "Session command guard before subprocess execution", editable=True, options=("on", "off")),
             SettingsItem("Tool Timeout", f"{timeout}s", "Maximum runtime for local tool execution"),
             SettingsItem("Max Output Tokens", f"{max_tokens:,}", "Model response token ceiling from environment configuration"),
@@ -2771,6 +2780,70 @@ class Renderer:
             footer="This command is planned but not implemented in SecOps_v2 yet.",
         )
 
+    def render_plan(self, plan: Any) -> None:
+        """Render the mission plan as a distinct, reviewable block (audit item #7).
+
+        The plan is a trust artifact — its own titled block (scope, numbered steps
+        with risk labels, which need approval), never folded into reasoning text.
+        """
+        steps = list(getattr(plan, "steps", []) or [])
+        scope = list(getattr(plan, "scope_snapshot", []) or [])
+        rows: List[OverlayRow] = [
+            OverlayRow(
+                "Scope",
+                ", ".join(scope) if scope else "unrestricted (no explicit in-scope target)",
+                accent=True,
+            )
+        ]
+        if not steps:
+            rows.append(OverlayRow("Steps", "no candidate steps proposed"))
+        for idx, step in enumerate(steps, start=1):
+            detail = getattr(step, "title", "") or getattr(step, "tool_name", "") or "step"
+            markers = [getattr(step, "risk_label", "") or "recon"]
+            if getattr(step, "needs_approval", False):
+                markers.append("needs approval")
+            status = getattr(step, "status", "planned")
+            if status and status != "planned":
+                markers.append(status)
+            rows.append(
+                OverlayRow(str(idx), f"{detail}  ·  {'  ·  '.join(markers)}",
+                           accent=bool(getattr(step, "active", False)))
+            )
+        divergences = list(getattr(plan, "divergences", []) or [])
+        if divergences:
+            rows.append(OverlayRow("Diverged", ", ".join(divergences)))
+        if getattr(plan, "acknowledged", False):
+            footer = "Plan acknowledged — each step is still gated individually by the permission engine."
+        else:
+            footer = "Acknowledge once to run the recon chain unattended; each high-risk step still prompts. (/plan to review)"
+        render_overlay(self.console, "Mission Plan", rows, footer=footer)
+
+    def _request_plan_acknowledgment(self, timeout: float = 60.0) -> bool:
+        """Compact one-key confirm for a mission plan preview. ``enter``/``y``/``a``
+        acknowledge; ``esc``/``n``/``d``/timeout decline. Non-TTY declines (the
+        print path resolves the acknowledgment on its own side)."""
+        import sys
+        import termios
+        import tty
+
+        if not sys.stdin.isatty():
+            return False
+        self.console.print(
+            f"  [{COLORS['text_muted']}]Acknowledge this plan?  "
+            f"[{COLORS['accent']}]enter[/] proceed   "
+            f"[{COLORS['text_muted']}]esc[/] decline[/]"
+        )
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            key = read_terminal_key(fd, input_timeout=timeout)
+        finally:
+            termios.tcsetattr(fd, termios.TCSANOW, old_settings)
+        if key == "enter":
+            return True
+        return len(key) == 1 and key.lower() in {"y", "a"}
+
     def render_tool_detail(self, tool_def: Any):
         """Show a registered SecOps tool as an executable slash-discovery target."""
         category = getattr(getattr(tool_def, "category", ""), "value", str(getattr(tool_def, "category", "")))
@@ -3548,12 +3621,28 @@ class Renderer:
         self._tool_start = None
         self._current_tool_name = ""
         self._current_tool_arguments = {}
+        self._emit_terminal_progress(None)
+
+    def _emit_terminal_progress(self, percent: float | None) -> None:
+        """ANIM-02: mirror scan progress to the host terminal's taskbar/tab via
+        OSC 9;4 (WezTerm, Windows Terminal, ConEmu...).  No-op off a TTY or under
+        reduced motion; percent=None clears it."""
+        if not bool(getattr(self.console, "is_terminal", False)) or reduced_motion():
+            return
+        output = getattr(self.console, "file", None)
+        if output is None:
+            return
+        with contextlib.suppress(Exception):
+            output.write(_osc_progress_sequence(percent))
+            output.flush()
 
     def _update_tool_feedback(self, phase: str, detail: str = "", percent: float | None = None):
         """Update the active tool spinner with structured progress."""
         if not self._tool_spinner:
             return
         self._tool_spinner.update_phase(phase, detail, percent)
+        if percent is not None:
+            self._emit_terminal_progress(percent)
 
     def _render_suggested_actions(self, actions: list[Any]) -> None:
         """Render numbered suggestion list.
@@ -3920,6 +4009,33 @@ class Renderer:
                     interrupt.start()
                     if event.approval_future and not event.approval_future.done():
                         event.approval_future.set_result(approved)
+
+                elif isinstance(event, PlanPreviewEvent):
+                    if is_thinking:
+                        _finish_active_thinking()
+
+                    if live_display:
+                        _flush_live_text()
+
+                    self._stop_tool_feedback()
+                    self.render_plan(event.plan)
+                    # acknowledgment_future is None when the plan was auto-acknowledged
+                    # (SANDBOX / print): render the block for the record, no prompt.
+                    future = event.acknowledgment_future
+                    if future is not None and not future.done():
+                        await interrupt.stop()
+                        acknowledged = self._request_plan_acknowledgment()
+                        interrupt.clear()
+                        interrupt.start()
+                        if not future.done():
+                            future.set_result(acknowledged)
+
+                elif isinstance(event, PlanDivergenceEvent):
+                    reason = f" — {escape(event.reason)}" if event.reason else ""
+                    self.console.print(
+                        f"  [{COLORS['warning']}]⚠ unplanned step: {escape(event.tool_name)}[/]"
+                        f"[{COLORS['text_dim']}]{reason}[/]"
+                    )
 
                 elif isinstance(event, SudoAuthenticationRequestEvent):
                     if is_thinking:

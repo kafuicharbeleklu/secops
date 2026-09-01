@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from secops_agent.core.mission import MissionContext
 from secops_agent.core.result_parser import ToolResultParser
 
 
@@ -299,6 +300,89 @@ Apache HTTP Server 2.4.50 - Remote Code Execution   | multiple/remote/50406.py
         parsed = self.parser.parse("vpn_status", "   \n  ", {})
 
         self.assertEqual(parsed.summary, "vpn_status: (no output)")
+
+
+class ObserveBlindSpotParserTests(unittest.TestCase):
+    """Audit R3.3 — the 6 OBSERVE blind-spot tools must reach the blackboard."""
+
+    def test_all_six_tools_have_dedicated_parsers(self):
+        for tool in (
+            "subdomain_enum",
+            "tech_detect",
+            "waf_detect",
+            "port_check",
+            "ping_host",
+            "traceroute",
+        ):
+            with self.subTest(tool=tool):
+                self.assertTrue(
+                    ToolResultParser.has_parser(tool),
+                    f"{tool} has no dedicated parser (OBSERVE blind spot)",
+                )
+
+    def test_subdomain_enum_adds_hosts_to_blackboard(self):
+        mission = MissionContext(name="m")
+        raw = "Found 2 subdomains:\n  • admin.example.com\n  • dev.example.com"
+        ToolResultParser(mission=mission).parse("subdomain_enum", raw, {"domain": "example.com"})
+        hostnames = {h.hostname for h in mission.hosts}
+        self.assertIn("admin.example.com", hostnames)
+        self.assertIn("dev.example.com", hostnames)
+
+    def test_port_check_open_port_adds_service_to_blackboard(self):
+        mission = MissionContext(name="m")
+        raw = "✅ Port 22/tcp is OPEN on 10.10.10.5\nConnection to 10.10.10.5 22 port [tcp/ssh] succeeded!"
+        ToolResultParser(mission=mission).parse(
+            "port_check", raw, {"target": "10.10.10.5", "port": 22, "protocol": "tcp"}
+        )
+        self.assertIn("10.10.10.5:22/tcp", {s.key for s in mission.services})
+
+    def test_ping_host_alive_adds_host_to_blackboard(self):
+        mission = MissionContext(name="m")
+        raw = (
+            "PING 10.10.10.5 (10.10.10.5) 56(84) bytes of data.\n"
+            "64 bytes from 10.10.10.5: icmp_seq=1 ttl=64 time=0.045 ms\n\n"
+            "--- 10.10.10.5 ping statistics ---\n"
+            "4 packets transmitted, 4 received, 0% packet loss, time 3050ms\n"
+            "rtt min/avg/max/mdev = 0.045/0.055/0.065/0.008 ms\n"
+        )
+        ToolResultParser(mission=mission).parse("ping_host", raw, {"target": "10.10.10.5"})
+        self.assertIn("10.10.10.5", {h.ip for h in mission.hosts})
+
+    def test_traceroute_reached_target_adds_host_to_blackboard(self):
+        mission = MissionContext(name="m")
+        raw = (
+            "traceroute to 10.10.10.5 (10.10.10.5), 30 hops max, 60 byte packets\n"
+            " 1  192.168.1.1 (192.168.1.1)  0.5 ms\n"
+            " 2  10.10.10.5 (10.10.10.5)  1.2 ms\n"
+        )
+        ToolResultParser(mission=mission).parse("traceroute", raw, {"target": "10.10.10.5"})
+        self.assertIn("10.10.10.5", {h.ip for h in mission.hosts})
+
+    def test_tech_detect_adds_service_to_blackboard(self):
+        mission = MissionContext(name="m")
+        raw = (
+            "🔍 Technology Detection for http://10.10.10.5:\n"
+            "  🖥️  Server: Apache/2.4.49\n"
+            "  📦 CMS: WordPress\n"
+        )
+        ToolResultParser(mission=mission).parse("tech_detect", raw, {"url": "http://10.10.10.5"})
+        self.assertTrue(mission.services, "tech_detect discovered no service on the blackboard")
+        versions = " ".join(s.version + " " + s.banner for s in mission.services)
+        self.assertIn("Apache/2.4.49", versions)
+
+    def test_waf_detect_records_finding_on_blackboard(self):
+        mission = MissionContext(name="m")
+        raw = (
+            "🛡️ WAF Detection for http://10.10.10.5\n\n"
+            "⚠️  WAF/CDN Detected:\n"
+            "  • Cloudflare\n"
+            "  • ModSecurity\n\n"
+            "📡 Normal Response Headers:\nHTTP/1.1 200 OK\n"
+        )
+        ToolResultParser(mission=mission).parse("waf_detect", raw, {"url": "http://10.10.10.5"})
+        waf_findings = [f for f in mission.findings if f.category == "waf"]
+        self.assertTrue(waf_findings, "waf_detect produced no finding on the blackboard")
+        self.assertIn("Cloudflare", waf_findings[0].evidence)
 
 
 if __name__ == "__main__":

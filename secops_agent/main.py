@@ -29,6 +29,7 @@ from secops_agent.cli.lessons import (
 )
 from secops_agent.cli.permissions import (
     PERMISSIONS_RULE_USAGE,
+    next_permission_mode,
     normalize_permission_mode,
     plan_permission_command,
 )
@@ -60,9 +61,11 @@ from secops_agent.core.llm import Message
 from secops_agent.core.memory import ConversationMemory
 from secops_agent.core.mission import MissionContext
 from secops_agent.core.permissions import ApprovalDecision, PermissionDecision, PermissionResource
+from secops_agent.core.request_context import parse_environment_signal, set_operator_environment
 from secops_agent.core.planner import MissionPlanner
 from secops_agent.core.preferences import load_model_preference, save_model_preference
 from secops_agent.core.result_parser import ToolResultParser
+from secops_agent.core.reporting import generate_pentest_report
 from secops_agent.core.sandbox import set_sandbox_enabled
 from secops_agent.core.structured_memory import KnowledgeBase, StructuredMemory
 from secops_agent.core.sudo import SudoAuthenticationDecision
@@ -70,6 +73,9 @@ from secops_agent.core.tools import registry
 from secops_agent.core.agent import (
     ApprovalRequestEvent,
     ErrorEvent,
+    FindingEvent,
+    PlanDivergenceEvent,
+    PlanPreviewEvent,
     SecOpsAgent,
     StatusEvent,
     SuggestedActionsEvent,
@@ -99,11 +105,11 @@ from secops_agent.utils.logger import logger
 # Import tools to trigger registration
 from secops_agent.tools import network, recon, web, exploit, crypto, forensics, exploitation
 
-from secops_agent.ui.theme import friendly_model_name, get_header_banner
+from secops_agent.ui.theme import file_link, friendly_model_name, get_header_banner
 from secops_agent.ui.menu import switch_model_menu
 from secops_agent.ui.overlay import OverlayChoice, choose_overlay
 from secops_agent.ui.permissions_menu import switch_permissions_menu
-from secops_agent.ui.commands import get_command
+from secops_agent.ui.commands import get_command, suggest_command
 
 app = typer.Typer(
     help="SecOps Agent — AI-Powered Security Operations CLI",
@@ -377,26 +383,96 @@ async def _track_agent_artifacts(
 ) -> AsyncIterator[object]:
     response_parts: list[str] = []
     tool_calls: dict[str, tuple[str, dict]] = {}
+    tool_artifacts: dict[str, str] = {}
+
+    def progress_line(phase: str, detail: str = "", percent: float | None = None) -> str:
+        suffix = f" — {detail}" if detail else ""
+        percent_text = f" ({percent:.0f}%)" if percent is not None else ""
+        return f"• {phase}{percent_text}{suffix}"
+
+    def ensure_tool_artifact(event_id: str, tool_name: str, arguments: dict) -> object | None:
+        artifact_id = tool_artifacts.get(event_id)
+        if artifact_id:
+            return runtime.get_artifact(artifact_id)
+        call_text = format_tool_call_text(tool_name, arguments)
+        artifact = runtime.add_artifact(
+            f"{call_text} running",
+            "tool-result",
+            "Tool execution timeline\n• started",
+            source=tool_name,
+            metadata={
+                "tool_call_id": event_id,
+                "status": "running",
+                "timeline": ["started"],
+            },
+        )
+        if artifact is not None:
+            tool_artifacts[event_id] = artifact.id
+        return artifact
 
     async for event in event_stream:
         if isinstance(event, TextEvent) and event.content:
             response_parts.append(event.content)
+        elif isinstance(event, FindingEvent):
+            # Part B (audit item #7 / T2.2): findings are written to /artifact live,
+            # at discovery time — not reconstructed from the transcript.
+            runtime.add_artifact(
+                event.title,
+                "finding",
+                event.detail or event.title,
+                source=event.source,
+                metadata={"finding_kind": event.kind, "severity": event.severity},
+            )
         elif isinstance(event, ToolCallEvent):
             tool_calls[event.id] = (event.name, dict(event.arguments or {}))
+        elif isinstance(event, ToolStartEvent):
+            tool_calls.setdefault(event.id, (event.name, dict(event.arguments or {})))
+            ensure_tool_artifact(event.id, event.name, dict(event.arguments or {}))
+        elif isinstance(event, ToolProgressEvent):
+            call_name, call_args = tool_calls.get(event.id, (event.name, {}))
+            artifact = ensure_tool_artifact(event.id, call_name, call_args)
+            if artifact is not None:
+                timeline = list((artifact.metadata or {}).get("timeline", []) or [])
+                line = progress_line(event.phase, event.detail, event.percent)
+                if not timeline or timeline[-1] != line:
+                    timeline.append(line)
+                metadata = dict(artifact.metadata or {})
+                metadata.update({
+                    "status": "running",
+                    "timeline": timeline[-60:],
+                    "phase": event.phase,
+                    "percent": event.percent,
+                })
+                runtime.update_artifact(
+                    artifact.id,
+                    content="Tool execution timeline\n" + "\n".join(timeline[-60:]),
+                    metadata=metadata,
+                )
         elif isinstance(event, ToolResultEvent):
             content = event.result.output or event.result.error or ""
             if str(content).strip():
                 text_failure = event.result.success and _looks_like_tool_failure(str(content))
                 status = "result" if event.result.success and not text_failure else "error"
                 call_name, call_args = tool_calls.get(event.id, (event.name, {}))
-                runtime.add_artifact(
-                    f"{format_tool_call_text(call_name, call_args)} {status}",
-                    "tool-result",
-                    str(content),
-                    source=event.name,
-                    path=_tool_result_spool_path(event.result),
-                    metadata=getattr(event.result, "metadata", {}) or {},
-                )
+                artifact = ensure_tool_artifact(event.id, call_name, call_args)
+                if artifact is not None:
+                    timeline = list((artifact.metadata or {}).get("timeline", []) or [])
+                    timeline.append("• completed" if status == "result" else "• failed or cancelled")
+                    result_metadata = dict(getattr(event.result, "metadata", {}) or {})
+                    metadata = dict(artifact.metadata or {})
+                    metadata.update(result_metadata)
+                    metadata.update({"status": status, "timeline": timeline[-60:]})
+                    runtime.update_artifact(
+                        artifact.id,
+                        title=f"{format_tool_call_text(call_name, call_args)} {status}",
+                        content=(
+                            "Tool execution timeline\n"
+                            + "\n".join(timeline[-60:])
+                            + f"\n\nResult ({status})\n{content}"
+                        ),
+                        metadata=metadata,
+                        path=_tool_result_spool_path(event.result),
+                    )
         yield event
 
     response = "".join(response_parts).strip()
@@ -444,6 +520,30 @@ def _statusline_payload(agent: SecOpsAgent, runtime: RuntimeState) -> dict[str, 
     }
 
 
+def _status_right(agent: SecOpsAgent, runtime: RuntimeState) -> str:
+    """FMT-06: compact operational context for the streaming/tool footer.
+
+    While a long tool runs the input bottom-toolbar statusline is off-screen;
+    keep model, permission mode, autonomy, sandbox state and phase visible in
+    the spinner footer instead of only the model name.  Ordered
+    most-important-first because the footer truncates its tail to fit.
+    """
+    payload = _statusline_payload(agent, runtime)
+    segments = [friendly_model_name(agent.llm.model_name)]
+    permissions = str(payload.get("permissions") or "").strip()
+    if permissions:
+        segments.append(permissions)
+    autonomy = str(payload.get("autonomy") or "").strip()
+    if autonomy:
+        segments.append(f"auto:{autonomy}")
+    if payload.get("sandbox"):
+        segments.append("sandbox")
+    phase = str(payload.get("phase") or "").strip()
+    if phase:
+        segments.append(f"phase:{phase}")
+    return " · ".join(segments)
+
+
 def _apply_permission_mode(mode: str, agent: SecOpsAgent, runtime: RuntimeState) -> None:
     agent.permissions.reset_session()
     runtime.permission_mode = mode
@@ -453,6 +553,13 @@ def _apply_permission_mode(mode: str, agent: SecOpsAgent, runtime: RuntimeState)
 
     if mode == "request-review":
         runtime.sandbox_enabled = False
+    elif mode == "plan":
+        # A first-class read-only planning session.  The agent may emit its
+        # normal mission preview, but a session-wide DENY is evaluated before
+        # every tool/command execution, including low-risk local tools.
+        runtime.sandbox_enabled = False
+        agent.permissions.remember(PermissionResource("command", "*"), PermissionDecision.DENY)
+        agent.permissions.remember(PermissionResource("tool", "*"), PermissionDecision.DENY)
     elif mode == "proceed-in-sandbox":
         runtime.sandbox_enabled = True
         agent.permissions.remember(PermissionResource("command", "*"), PermissionDecision.ALLOW)
@@ -467,6 +574,14 @@ def _apply_permission_mode(mode: str, agent: SecOpsAgent, runtime: RuntimeState)
         agent.permissions.remember(PermissionResource("tool", "*"), PermissionDecision.ASK)
 
     set_sandbox_enabled(runtime.sandbox_enabled)
+
+
+def _cycle_permission_mode(agent: SecOpsAgent, runtime: RuntimeState) -> dict[str, object]:
+    """PROC-02: advance to the next permission mode (Shift+Tab), apply it, and
+    return a refreshed statusline payload so the toolbar reflects the change."""
+    next_mode = next_permission_mode(runtime.permission_mode)
+    _apply_permission_mode(next_mode, agent, runtime)
+    return _statusline_payload(agent, runtime)
 
 
 def _set_response_profile(agent: SecOpsAgent, runtime: RuntimeState, fast_mode: bool) -> str:
@@ -628,6 +743,20 @@ def _apply_loaded_runtime_controls(agent: SecOpsAgent, runtime: RuntimeState) ->
     agent.allow_automatic_planner_execution = runtime.allow_automatic_planner_execution
 
 
+def _unknown_command_message(command: str) -> str:
+    """Render an actionable, conservative error for an unknown slash command."""
+    suggestion = suggest_command(command)
+    if suggestion is None:
+        return f"Unknown command: {command}\nUse /help to list available commands."
+
+    usage = suggestion.usage or suggestion.name
+    return (
+        f"Unknown command: {command}\n"
+        f"Did you mean {suggestion.name}?\n"
+        f"Usage: {usage}"
+    )
+
+
 def _render_header_banner(renderer: Renderer, model_name: str) -> None:
     renderer.console.print(Text.from_ansi(get_header_banner(model_name)))
 
@@ -658,6 +787,16 @@ def _export_conversation(memory: ConversationMemory, name: str) -> Path:
         lines.append("---\n")
 
     filepath.write_text("\n".join(lines), encoding="utf-8")
+    return filepath
+
+
+def _export_pentest_report(mission: MissionContext, name: str) -> Path:
+    """Generate the structured mission report and save it as a review artifact."""
+    report_dir = Path.home() / ".secops_agent" / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{name}.md" if not name.endswith(".md") else name
+    filepath = report_dir / filename
+    filepath.write_text(generate_pentest_report(mission), encoding="utf-8")
     return filepath
 
 
@@ -740,6 +879,13 @@ async def _run_side_question(task: RuntimeTask, side_agent: SecOpsAgent, query: 
                 )
                 if event.approval_future and not event.approval_future.done():
                     event.approval_future.set_result(ApprovalDecision(allowed=False))
+            elif isinstance(event, PlanPreviewEvent):
+                # A background side question cannot run active tools unattended:
+                # decline the plan (aborts the step like a denied approval) rather
+                # than blocking on an acknowledgment no one can give.
+                task.detail = "mission plan not acknowledged in background"
+                if event.acknowledgment_future and not event.acknowledgment_future.done():
+                    event.acknowledgment_future.set_result(False)
             elif isinstance(event, SudoAuthenticationRequestEvent):
                 task.detail = "sudo authentication denied in background"
                 task.append_log("sudo authentication denied in background task")
@@ -820,7 +966,7 @@ async def _render_interactive_turn(
         # (R1 / Example E), so the loop can process them instead of dropping them.
         queued = await renderer.render_agent_stream(
             event_stream,
-            status_right=friendly_model_name(agent.llm.model_name),
+            status_right=_status_right(agent, runtime),
             memory=agent.memory,
             runtime=runtime,
         )
@@ -852,10 +998,12 @@ async def _run_print_prompt(
     collected_tools: list[dict[str, Any]] = []
     collected_actions: list[str] = []
     collected_status: list[str] = []
+    collected_plan: dict[str, Any] | None = None
+    collected_divergences: list[dict[str, str]] = []
     error_text: str | None = None
 
     async def consume() -> bool:
-        nonlocal error_text
+        nonlocal error_text, collected_plan
         emitted_text = False
         attachment_parts = build_attachment_model_parts(runtime)
         event_stream = _track_agent_artifacts(
@@ -904,6 +1052,19 @@ async def _run_print_prompt(
                         f"Permission denied in --print mode: {event.resource.value}",
                         err=True,
                     )
+            elif isinstance(event, PlanPreviewEvent):
+                # The plan is a trajectory *review*, not a per-tool safety gate:
+                # auto-acknowledge in headless mode so the mission can proceed, then
+                # record it. Individual dangerous tools are still denied above.
+                if event.acknowledgment_future and not event.acknowledgment_future.done():
+                    event.acknowledgment_future.set_result(True)
+                if json_mode:
+                    collected_plan = event.plan.to_dict()
+            elif isinstance(event, PlanDivergenceEvent):
+                if json_mode:
+                    collected_divergences.append(
+                        {"tool": event.tool_name, "reason": event.reason}
+                    )
             elif isinstance(event, StatusEvent):
                 # E2: surface retry/backoff progress so a transient-5xx storm is
                 # not a silent hang in headless mode. stdout stays the clean answer
@@ -933,6 +1094,8 @@ async def _run_print_prompt(
             "tools": collected_tools,
             "suggested_actions": collected_actions,
             "status": collected_status,
+            "plan": collected_plan,
+            "divergences": collected_divergences,
             "error": error_text,
         }
         sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
@@ -1009,6 +1172,7 @@ async def run_chat_loop(
                         console=renderer.console,
                         runtime=runtime,
                         statusline=_statusline_payload(agent, runtime),
+                        permission_cycler=lambda: _cycle_permission_mode(agent, runtime),
                     )
 
                     user_input = await input_handler.get_input(model_name=agent.llm.model_name)
@@ -1021,7 +1185,7 @@ async def run_chat_loop(
                 if user_input == InputHandler.SHORTCUT_REQUEST:
                     renderer.render_help(
                         initial_view="shortcuts",
-                        status_right=friendly_model_name(agent.llm.model_name),
+                        status_right=_status_right(agent, runtime),
                         prompt_frame=True,
                     )
                     continue
@@ -1029,7 +1193,7 @@ async def run_chat_loop(
                     renderer.render_artifacts(
                         runtime,
                         transient=True,
-                        status_right=friendly_model_name(agent.llm.model_name),
+                        status_right=_status_right(agent, runtime),
                     )
                     continue
     
@@ -1069,7 +1233,7 @@ async def run_chat_loop(
                     elif canonical_cmd == "/help":
                         renderer.render_help(
                             initial_view="general",
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                             prompt_frame=interactive_surface,
                         )
                         if interactive_surface:
@@ -1089,7 +1253,7 @@ async def run_chat_loop(
                         renderer.render_tools(
                             registry.list_tools(),
                             transient=interactive_surface,
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                             prompt_frame=interactive_surface,
                         )
                         if interactive_surface:
@@ -1101,7 +1265,7 @@ async def run_chat_loop(
                             renderer.render_tools(
                                 registry.list_tools(),
                                 transient=interactive_surface,
-                                status_right=friendly_model_name(agent.llm.model_name),
+                                status_right=_status_right(agent, runtime),
                                 prompt_frame=interactive_surface,
                             )
                             if interactive_surface:
@@ -1150,7 +1314,7 @@ async def run_chat_loop(
                             continue
                         path = _save_agent_session(agent, save_arg.name, runtime=runtime)
                         auto_session_name = save_arg.name
-                        renderer.render_success(f"Saved to {path}")
+                        renderer.render_success(f"Saved to {file_link(path)}")
                     elif canonical_cmd == "/load":
                         load_arg = parse_load_argument(arg)
                         if load_arg.error:
@@ -1176,7 +1340,24 @@ async def run_chat_loop(
                             source="/export",
                             path=path,
                         )
-                        renderer.render_success(f"Exported to {path}")
+                        renderer.render_success(f"Exported to {file_link(path)}")
+                    elif canonical_cmd == "/report":
+                        report_arg = parse_export_argument(arg)
+                        mission = getattr(getattr(agent, "structured_memory", None), "mission", None)
+                        if mission is None:
+                            renderer.render_error("No mission context is available for a report.")
+                            continue
+                        path = _export_pentest_report(mission, report_arg.name)
+                        content = path.read_text(encoding="utf-8")
+                        runtime.add_artifact(
+                            path.name,
+                            "report",
+                            content,
+                            source="/report",
+                            path=path,
+                            metadata={"format": "markdown", "phase": str(mission.phase.value)},
+                        )
+                        renderer.render_success(f"Pentest report generated: {file_link(path)}")
                     elif canonical_cmd == "/context":
                         s = agent.memory.get_stats()
                         renderer.render_context(
@@ -1188,7 +1369,7 @@ async def run_chat_loop(
                             estimated_tokens=s["estimated_tokens"],
                             tools_count=len(registry.list_tools()),
                             transient=interactive_surface,
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                             prompt_frame=interactive_surface,
                         )
                         if interactive_surface:
@@ -1210,7 +1391,7 @@ async def run_chat_loop(
                         renderer.render_agents(
                             runtime,
                             transient=interactive_surface,
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                         )
                         if interactive_surface:
                             renderer.render_user_input(stripped, trailing_blank=False, separator=False)
@@ -1252,7 +1433,7 @@ async def run_chat_loop(
                             log_file=settings.LOG_FILE,
                             runtime=runtime,
                             transient=interactive_surface,
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                             prompt_frame=interactive_surface,
                         )
                         if interactive_surface:
@@ -1287,7 +1468,7 @@ async def run_chat_loop(
                                 renderer.render_status(f"{selected_label} is read-only in this session")
                     elif canonical_cmd == "/keybindings":
                         renderer.render_keybindings(
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                             prompt_frame=interactive_surface,
                         )
                         if interactive_surface:
@@ -1300,18 +1481,41 @@ async def run_chat_loop(
                             runtime,
                             arg,
                             transient=interactive_surface,
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                         )
                         if interactive_surface:
                             renderer.render_user_input(stripped, trailing_blank=False, separator=False)
                             renderer.render_status("Exited /artifact command")
+                    elif canonical_cmd == "/plan":
+                        mission = getattr(
+                            getattr(agent, "structured_memory", None), "mission", None
+                        )
+                        plan_arg = arg.strip()
+                        if mission is None:
+                            renderer.render_status("No active mission plan yet.")
+                        elif plan_arg.lower().startswith("scope"):
+                            new_scope = plan_arg[len("scope"):].strip()
+                            if not new_scope:
+                                renderer.render_error("Usage: /plan scope <target>")
+                            else:
+                                mission.narrow_scope(new_scope)
+                                renderer.render_success(f"Scope narrowed to {new_scope}.")
+                                renderer.render_plan(mission.plan)
+                        elif plan_arg:
+                            renderer.render_error("Usage: /plan [scope <target>]")
+                        elif getattr(mission.plan, "steps", None) or getattr(
+                            mission.plan, "acknowledged", False
+                        ):
+                            renderer.render_plan(mission.plan)
+                        else:
+                            renderer.render_status("No active mission plan yet.")
                     elif canonical_cmd == "/attach":
                         attach_arg = parse_attach_argument(arg)
                         if attach_arg.action == "list":
                             renderer.render_attachments(
                                 runtime,
                                 transient=interactive_surface,
-                                status_right=friendly_model_name(agent.llm.model_name),
+                                status_right=_status_right(agent, runtime),
                             )
                             if interactive_surface:
                                 renderer.render_user_input(stripped, trailing_blank=False, separator=False)
@@ -1345,7 +1549,7 @@ async def run_chat_loop(
                         if permission_plan.action == "menu":
                             new_mode = switch_permissions_menu(
                                 runtime.permission_mode,
-                                status_right=friendly_model_name(agent.llm.model_name),
+                                status_right=_status_right(agent, runtime),
                                 prompt_frame=True,
                             )
                             renderer.render_user_input(stripped, trailing_blank=False, separator=False)
@@ -1360,12 +1564,33 @@ async def run_chat_loop(
                             renderer.render_success("Session permission rules cleared.")
                         elif permission_plan.action == "rule":
                             permission_arg = permission_plan.argument
+                            if runtime.permission_mode == "plan":
+                                renderer.render_error(
+                                    "Plan mode is read-only. Select another permission mode before "
+                                    "adding an allow/ask rule."
+                                )
+                                continue
                             resource = agent.permissions.parse_resource(permission_arg.resource_text)
                             if not resource:
                                 renderer.render_error(PERMISSIONS_RULE_USAGE)
                                 continue
+                            decision = PermissionDecision(permission_arg.action)
+                            # A blanket allow on a privileged/exploit tool (r5+) or a
+                            # compound command needs an explicit second confirmation, so
+                            # the CLI can't silently annul the approval UI's safety
+                            # divergence (audit T2.8).
+                            if (
+                                agent.permissions.rule_requires_confirmation(resource, decision)
+                                and not permission_arg.confirmed
+                            ):
+                                renderer.render_error(
+                                    f"{resource.value} is high-risk: a blanket 'allow' needs "
+                                    f"explicit confirmation. Re-run: /permissions "
+                                    f"{permission_arg.action} {resource.value} confirm"
+                                )
+                                continue
                             runtime.permission_mode = "request-review"
-                            agent.permissions.remember(resource, PermissionDecision(permission_arg.action))
+                            agent.permissions.remember(resource, decision)
                             renderer.render_success(
                                 f"Permission rule set: {permission_arg.action} {resource.value}"
                             )
@@ -1438,7 +1663,7 @@ async def run_chat_loop(
                         if not arg and interactive_surface:
                             selected_session = _choose_saved_session(
                                 _list_saved_sessions(),
-                                status_right=friendly_model_name(agent.llm.model_name),
+                                status_right=_status_right(agent, runtime),
                                 prompt_frame=True,
                             )
                             renderer.render_user_input(stripped, trailing_blank=False, separator=False)
@@ -1480,7 +1705,7 @@ async def run_chat_loop(
                         renderer.render_hooks(
                             runtime.hooks,
                             transient=interactive_surface,
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                             prompt_frame=interactive_surface,
                         )
                         if interactive_surface:
@@ -1512,7 +1737,7 @@ async def run_chat_loop(
                             runtime.mcp,
                             runtime.mcp_runtime,
                             transient=interactive_surface,
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                             prompt_frame=interactive_surface,
                         )
                         if interactive_surface:
@@ -1528,7 +1753,7 @@ async def run_chat_loop(
                         renderer.render_skills(
                             runtime.skills,
                             transient=interactive_surface,
-                            status_right=friendly_model_name(agent.llm.model_name),
+                            status_right=_status_right(agent, runtime),
                             prompt_frame=interactive_surface,
                         )
                         if interactive_surface:
@@ -1563,7 +1788,7 @@ async def run_chat_loop(
                     elif slash.spec:
                         renderer.render_planned_command(slash.spec.name, slash.spec.description)
                     else:
-                        renderer.render_error(f"Unknown command: {cmd}")
+                        renderer.render_error(_unknown_command_message(cmd))
                     continue
     
                 # ── Agent interaction ─────────────────────────────────
@@ -1621,10 +1846,19 @@ def main(
         help="Run an initial prompt, then continue the TUI session.",
     ),
     sandbox: bool = typer.Option(False, "--sandbox", help="Enable restricted terminal command execution."),
+    env: Optional[str] = typer.Option(
+        None,
+        "--env",
+        help=(
+            "Declare the operating environment (ctf, lab, authorized). A trusted "
+            "CTF/lab escalates autonomy — this explicit operator signal is the only "
+            "way to do so; prompt/tool-output text never can. Overrides SECOPS_ENV."
+        ),
+    ),
     permission_mode: Optional[str] = typer.Option(
         None,
         "--permission-mode",
-        help="Permission mode: request-review, proceed-in-sandbox, always-proceed, strict.",
+        help="Permission mode: plan, request-review, proceed-in-sandbox, always-proceed, strict.",
     ),
     dangerously_skip_permissions: bool = typer.Option(
         False,
@@ -1657,6 +1891,13 @@ def main(
     except ValueError as exc:
         typer.echo(f"✗ {exc}", err=True)
         raise typer.Exit(code=2) from exc
+
+    if env is not None:
+        declared_env = parse_environment_signal(env)
+        if declared_env is None:
+            typer.echo(f"✗ Unknown --env '{env}'. Use one of: ctf, lab, authorized.", err=True)
+            raise typer.Exit(code=2)
+        set_operator_environment(declared_env)
 
     if log_file:
         settings.LOG_FILE = str(log_file.expanduser())

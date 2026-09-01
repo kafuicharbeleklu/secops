@@ -602,7 +602,7 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("supervisé", line)
         self.assertIn("reconnaissance", line)
 
-    def test_default_footer_is_minimal_antigravity_shape(self):
+    def test_default_footer_keeps_operational_context_visible(self):
         handler = InputHandler.__new__(InputHandler)
         handler.session = SimpleNamespace(
             default_buffer=SimpleNamespace(complete_state=None)
@@ -612,12 +612,10 @@ class TUIPolishTests(unittest.TestCase):
 
         footer_text = "".join(text for _, text in handler._get_toolbar())
 
-        self.assertIn("? for shortcuts", footer_text)
         self.assertIn("Gemini 2.5 Flash", footer_text)
-        self.assertNotIn("ctrl+j", footer_text)
-        self.assertNotIn("ctrl+l", footer_text)
-        self.assertNotIn("thinking", footer_text)
-        self.assertNotIn("tasks", footer_text)
+        self.assertIn("thinking", footer_text)
+        self.assertIn("2 tasks", footer_text)
+        self.assertIn("no sandbox", footer_text)
 
     def test_prompt_frame_stays_stable_after_commands(self):
         handler = InputHandler.__new__(InputHandler)
@@ -631,7 +629,7 @@ class TUIPolishTests(unittest.TestCase):
 
         self.assertIn("─", prompt_text)
         self.assertIn("> ", prompt_text)
-        self.assertIn("? for shortcuts", toolbar_text)
+        self.assertIn("idle", toolbar_text)
         self.assertIn("Gemini 2.5 Flash", toolbar_text)
 
     def test_prompt_toolbar_shows_completion_overflow_inline(self):
@@ -797,7 +795,7 @@ class TUIPolishTests(unittest.TestCase):
         lines = build_choice_overlay_lines(
             "Active Permissions",
             _permission_choices("always-proceed"),
-            selected=2,
+            selected=3,
             width=100,
             height=18,
             footer="Keyboard: ↑/↓ Navigate  enter Select  esc Close",
@@ -1918,7 +1916,8 @@ class TUIPolishTests(unittest.TestCase):
         self.assertTrue(renderer._toggle_latest_transcript())
         output = renderer.console.export_text()
 
-        self.assertIn("● Bash(pwd) (ctrl+o to expand)", output)
+        self.assertIn("● Bash(pwd) (ctrl+o to expand) R5", output)
+        self.assertNotIn("R0", output)
         self.assertNotIn("ctrl+o to collapse", output)
 
     def test_renderer_ctrl_o_bounds_long_tool_output_to_terminal_height(self):
@@ -2875,6 +2874,16 @@ class TUIPolishTests(unittest.TestCase):
 
         self.assertEqual(normalized, text)
 
+    def test_terminal_output_contract_is_hierarchical_and_not_decorative(self):
+        from secops_agent.core.llm import SECOPS_SYSTEM_INSTRUCTION
+
+        self.assertIn("Terminal output standard", SECOPS_SYSTEM_INSTRUCTION)
+        self.assertIn("smallest shape", SECOPS_SYSTEM_INSTRUCTION)
+        self.assertIn("at most three `##` headings", SECOPS_SYSTEM_INSTRUCTION)
+        self.assertIn("single status marker", SECOPS_SYSTEM_INSTRUCTION)
+        self.assertIn("Response recipes", SECOPS_SYSTEM_INSTRUCTION)
+        self.assertIn("Blocked action", SECOPS_SYSTEM_INSTRUCTION)
+
     def test_agent_stream_renders_thought_and_indented_text(self):
         renderer = Renderer()
         renderer.console = Console(width=88, record=True, force_terminal=False, file=io.StringIO())
@@ -3075,6 +3084,28 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("Resource: read_file(/etc/passwd)", rendered)
         self.assertIn("Risk: R4 local file access", rendered)
         self.assertIn("path checked before access", rendered)
+
+    def test_approval_prompt_shows_write_file_diff_before_execution(self):
+        # Audit T1.1: the operator must approve against the real content/diff shown at
+        # the gate, not a prose summary rendered only after the write already happened.
+        resource = PermissionResource(kind="tool", name="write_file")
+        content = "<?php system($_GET['c']); ?>\necho 'second line';"
+        lines = _approval_lines(
+            "write_file",
+            {"path": "shell.php", "content": content},
+            resource,
+            0,
+            _approval_options(resource),
+            100,
+        )
+        rendered = "\n".join(lines)
+
+        self.assertIn("Do you want to proceed?", rendered)
+        self.assertIn("Added 2 lines", rendered)
+        self.assertIn("shell.php", rendered)
+        self.assertIn("<?php system($_GET['c']); ?>", rendered)
+        # The diff must render BEFORE the proceed line, i.e. at the gate, pre-write.
+        self.assertLess(rendered.index("<?php"), rendered.index("Do you want to proceed?"))
 
     def test_approval_prompt_uses_captured_agy_command_permission_copy(self):
         resource = PermissionResource(kind="command_prefix", name="pwd")

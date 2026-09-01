@@ -11,6 +11,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -18,6 +19,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+
+
+POST_EXPLOITATION_BOUNDARY = (
+    "Post-exploitation is intentionally non-intrusive in SecOps Agent: no further "
+    "tool actions are available. Preserve the evidence already collected, document "
+    "impact and remediation, then generate /report."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +206,29 @@ def _scope_entry_matches(scope_entry: str, value: str, *, out_of_scope: bool = F
         return _path_matches(entry, candidate)
 
     return entry.casefold() == candidate.casefold()
+
+
+def _infer_target_type(value: str) -> str:
+    """Best-effort classification of a scope/target string.
+
+    Descriptive only — scope enforcement in ``Scope`` matches generically and does
+    not depend on this label. Used when ``narrow_scope`` registers a target so the
+    prompt summary and phase inference see a sensible type.
+    """
+    raw = (value or "").strip()
+    if _URL_SCHEME_RE.match(raw):
+        return "url"
+    if "/" in raw:
+        try:
+            ipaddress.ip_network(raw, strict=False)
+            return "cidr"
+        except ValueError:
+            pass
+    try:
+        ipaddress.ip_address(raw)
+        return "ip"
+    except ValueError:
+        return "domain"
 
 
 @dataclass
@@ -587,6 +618,138 @@ class ActionTraceEntry:
 
 
 # ---------------------------------------------------------------------------
+# Mission plan — the reviewable candidate trajectory (blackboard object)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PlanStep:
+    """One proposed step in the mission plan preview."""
+
+    title: str
+    tool_name: str = ""
+    risk_label: str = "recon"       # recon | ACTIVE | DESTRUCTIVE (display label)
+    active: bool = False            # True once the tool is beyond passive recon (>= r2)
+    needs_approval: bool = False    # True when the per-tool gate will still pause on it
+    status: str = "planned"         # planned | done | diverged
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "title": self.title,
+            "tool_name": self.tool_name,
+            "risk_label": self.risk_label,
+            "active": self.active,
+            "needs_approval": self.needs_approval,
+            "status": self.status,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "PlanStep":
+        return cls(
+            title=str(d.get("title", "")),
+            tool_name=str(d.get("tool_name", "")),
+            risk_label=str(d.get("risk_label", "recon")),
+            active=bool(d.get("active", False)),
+            needs_approval=bool(d.get("needs_approval", False)),
+            status=str(d.get("status", "planned")),
+        )
+
+
+@dataclass
+class MissionPlan:
+    """The reviewable candidate trajectory for a mission (ARCHITECTURE §4/§8).
+
+    Built and shown once, before the mission's first active (>= r2) step. It is a
+    trust artifact, not an authorization: ``acknowledged`` records the operator's
+    one-time approval of the *trajectory*, while the PermissionEngine still gates
+    every individual tool afterward (the separation-of-powers invariant).
+    ``divergences`` collects active tools that executed without being in the
+    acknowledged plan — one entry per tool. Unlike the runtime-only scan cache,
+    the plan is persisted mission state.
+    """
+
+    steps: List[PlanStep] = field(default_factory=list)
+    scope_snapshot: List[str] = field(default_factory=list)
+    acknowledged: bool = False
+    divergences: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "steps": [s.to_dict() for s in self.steps],
+            "scope_snapshot": list(self.scope_snapshot),
+            "acknowledged": self.acknowledged,
+            "divergences": list(self.divergences),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "MissionPlan":
+        return cls(
+            steps=[
+                PlanStep.from_dict(s)
+                for s in d.get("steps", []) or []
+                if isinstance(s, dict)
+            ],
+            scope_snapshot=list(d.get("scope_snapshot", []) or []),
+            acknowledged=bool(d.get("acknowledged", False)),
+            divergences=list(d.get("divergences", []) or []),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Scan-result cache (mission-scoped, runtime-only)
+# ---------------------------------------------------------------------------
+
+# Argument names that identify *what* was scanned (the cache-key anchor). A key
+# with no resolvable target is never cached — target alone is not enough, but a
+# target is required.
+_SCAN_CACHE_TARGET_ARG_KEYS = ("target", "domain", "host", "url", "ip")
+# Only idempotent recon scans are cacheable. Deliberately narrow: this is a
+# read-through convenience for deterministic-preflight follow-ups, not a general
+# result store.
+_SCAN_CACHE_TOOLS = frozenset({"nmap_scan", "subdomain_enum"})
+# How long a cached scan stays answerable without a fresh run (seconds). Bounds
+# "fresh-enough" so a stale mid-mission scan is re-run rather than silently reused.
+_SCAN_CACHE_TTL_SECONDS = 1800.0
+
+
+@dataclass
+class ScanCacheEntry:
+    """A parsed scan result cached for same-mission reuse."""
+
+    parsed_result: Any
+    recorded_at: float
+
+
+def _scan_cache_key(tool_name: str, arguments: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Stable key over (target, tool, normalized scan-shaping args).
+
+    Returns ``None`` when no target can be resolved — an untargeted scan is never
+    cached. Scan-shaping args (ports, scan_type, …) are folded into the key so a
+    narrower/wider follow-up cannot be answered from a mismatched result; internal
+    ``_``-prefixed keys (e.g. ``_tool_name``) are ignored so the write-side and
+    read-side argument shapes hash identically.
+    """
+    args = dict(arguments or {})
+    target = ""
+    for key in _SCAN_CACHE_TARGET_ARG_KEYS:
+        value = args.get(key)
+        if value is not None and str(value).strip():
+            target = str(value).strip().casefold()
+            break
+    if not target:
+        return None
+    shaping = {
+        key: str(value).strip().casefold()
+        for key, value in args.items()
+        if key not in _SCAN_CACHE_TARGET_ARG_KEYS
+        and not key.startswith("_")
+        and value is not None
+        and str(value).strip() != ""
+    }
+    arg_sig = ";".join(f"{key}={shaping[key]}" for key in sorted(shaping))
+    return f"{tool_name}\x1f{target}\x1f{arg_sig}"
+
+
+# ---------------------------------------------------------------------------
 # Mission context — the "brain state" of an engagement
 # ---------------------------------------------------------------------------
 
@@ -619,10 +782,18 @@ class MissionContext:
     hosts: List[Host] = field(default_factory=list)
     credentials: List[Credential] = field(default_factory=list)
 
-    # Plan (free-form for now; will be structured in Phase 3)
+    # Plan — first-class reviewable trajectory (audit item #7 / ARCHITECTURE §4/§8).
+    plan: MissionPlan = field(default_factory=MissionPlan)
     completed_objectives: List[str] = field(default_factory=list)
     blocked_reasons: List[str] = field(default_factory=list)
     action_trace: List[ActionTraceEntry] = field(default_factory=list)
+
+    # Runtime-only scan cache (see record_scan_result / cached_scan_result).
+    # Deliberately excluded from to_dict(): a within-session performance/UX
+    # optimisation, not persisted mission state.
+    scan_result_cache: Dict[str, ScanCacheEntry] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     # ---------------------------------------------------------------
     # Convenience helpers
@@ -633,6 +804,35 @@ class MissionContext:
         self.targets.append(t)
         self.scope.in_scope.append(value)
         return t
+
+    def narrow_scope(self, value: str) -> None:
+        """Tighten the engagement scope to exactly ``value`` (a ``/plan scope`` edit).
+
+        Replaces ``scope.in_scope`` so ``ScopeGuard`` deterministically denies every
+        other target, and registers ``value`` as a target so it participates in phase
+        inference and the prompt summary. Blank input is a no-op. ``add_target`` runs
+        first (it also appends to ``in_scope``); the subsequent hard reset guarantees
+        ``in_scope`` ends as exactly ``[value]`` with no leftover broad entry.
+        """
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return
+        if not any(t.value == cleaned for t in self.targets):
+            self.add_target(cleaned, target_type=_infer_target_type(cleaned))
+        self.scope.in_scope = [cleaned]
+
+    def record_divergence(self, tool_name: str) -> bool:
+        """Record that an active tool executed outside the acknowledged plan.
+
+        Returns ``True`` the first time a given tool diverges — so the caller emits a
+        single ``PlanDivergenceEvent`` per tool — and ``False`` on repeats. Blank
+        names are ignored.
+        """
+        name = (tool_name or "").strip()
+        if not name or name in self.plan.divergences:
+            return False
+        self.plan.divergences.append(name)
+        return True
 
     def transition_phase(self, new_phase: PentestPhase, reason: str = "") -> None:
         old = self.phase
@@ -705,6 +905,11 @@ class MissionContext:
 
         return old_phase != self.phase or old_reason != self.phase_reason
 
+    @property
+    def post_exploitation_boundary_active(self) -> bool:
+        """Whether the product's non-intrusive post-exploitation boundary applies."""
+        return self.phase == PentestPhase.POST_EXPLOITATION
+
     def upsert_finding(self, finding: Finding) -> Finding:
         if not finding.phase:
             finding.phase = self.phase.value
@@ -754,6 +959,57 @@ class MissionContext:
         return self.action_trace[-max(0, limit):] if limit else []
 
     # ---------------------------------------------------------------
+    # Scan-result cache (deterministic-preflight reuse)
+    # ---------------------------------------------------------------
+
+    def record_scan_result(
+        self,
+        tool_name: str,
+        arguments: Optional[Dict[str, Any]],
+        parsed_result: Any,
+    ) -> None:
+        """Cache a parsed scan result for same-mission reuse.
+
+        Called ONLY from the result-parser OBSERVE path (``result_parser.py``)
+        immediately after a genuine, approved tool execution. There is no other
+        caller by design: lesson/KB text and raw tool-output text never reach
+        this method, so the cache cannot be populated from an untrusted channel
+        (ASI01/ASI06). Untargeted or non-scan tools are silently ignored.
+        """
+        if tool_name not in _SCAN_CACHE_TOOLS or parsed_result is None:
+            return
+        key = _scan_cache_key(tool_name, arguments)
+        if key is None:
+            return
+        self.scan_result_cache[key] = ScanCacheEntry(
+            parsed_result=parsed_result,
+            recorded_at=time.time(),
+        )
+
+    def cached_scan_result(
+        self,
+        tool_name: str,
+        arguments: Optional[Dict[str, Any]],
+        *,
+        max_age: Optional[float] = _SCAN_CACHE_TTL_SECONDS,
+    ) -> Any:
+        """Return a fresh cached parsed result for this exact (target, tool, args),
+        or ``None`` on any miss — unknown target, mismatched scan-shaping args
+        (different scope/port range), non-scan tool, or a too-stale entry.
+        """
+        if tool_name not in _SCAN_CACHE_TOOLS:
+            return None
+        key = _scan_cache_key(tool_name, arguments)
+        if key is None:
+            return None
+        entry = self.scan_result_cache.get(key)
+        if entry is None:
+            return None
+        if max_age is not None and (time.time() - entry.recorded_at) > max_age:
+            return None
+        return entry.parsed_result
+
+    # ---------------------------------------------------------------
     # Compact summary for the LLM system prompt
     # ---------------------------------------------------------------
 
@@ -765,6 +1021,8 @@ class MissionContext:
         lines.append(f"- **Phase:** {self.phase.value.upper()}")
         if self.phase_reason:
             lines.append(f"- **Phase reason:** {self.phase_reason}")
+        if self.post_exploitation_boundary_active:
+            lines.append(f"- **Product boundary:** {POST_EXPLOITATION_BOUNDARY}")
         lines.append(f"- **Type:** {self.engagement_type}")
         if self.targets:
             lines.append(f"- **Targets:** {', '.join(t.value for t in self.targets if t.in_scope)}")
@@ -833,6 +1091,7 @@ class MissionContext:
             "services": [s.to_dict() for s in self.services],
             "hosts": [h.to_dict() for h in self.hosts],
             "credentials": [c.to_dict() for c in self.credentials],
+            "plan": self.plan.to_dict(),
             "completed_objectives": list(self.completed_objectives),
             "blocked_reasons": list(self.blocked_reasons),
             "action_trace": [entry.to_dict() for entry in self.action_trace],
@@ -854,6 +1113,7 @@ class MissionContext:
             services=[Service.from_dict(s) for s in d.get("services", [])],
             hosts=[Host.from_dict(h) for h in d.get("hosts", [])],
             credentials=[Credential.from_dict(c) for c in d.get("credentials", [])],
+            plan=MissionPlan.from_dict(d.get("plan", {}) or {}),
             completed_objectives=d.get("completed_objectives", []),
             blocked_reasons=d.get("blocked_reasons", []),
             action_trace=[

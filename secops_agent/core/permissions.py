@@ -38,12 +38,10 @@ TOOL_TIERS: Dict[str, ActionTier] = {
     "port_check": ActionTier.PASSIVE,
     "dns_lookup": ActionTier.PASSIVE,
     "whois_lookup": ActionTier.PASSIVE,
-    "subdomain_enum": ActionTier.PASSIVE,
     "http_headers": ActionTier.PASSIVE,
     "tech_detect": ActionTier.PASSIVE,
     "ssl_check": ActionTier.PASSIVE,
     "ssl_audit": ActionTier.PASSIVE,
-    "nmap_scan": ActionTier.PASSIVE,
     "file_analyze": ActionTier.PASSIVE,
     "log_analyze": ActionTier.PASSIVE,
     "find_files": ActionTier.PASSIVE,
@@ -56,6 +54,12 @@ TOOL_TIERS: Dict[str, ActionTier] = {
     "sysinfo": ActionTier.PASSIVE,
     "lab_setup_check": ActionTier.PASSIVE,
     "vpn_status": ActionTier.PASSIVE,
+
+    # Active enumeration (r3) hits a real target -> ASK by default. These carry
+    # risk_class=ACTIVE_ENUMERATION; the tier MUST agree with the risk class so the
+    # permission gate does not follow the laxer taxonomy (audit T2.7).
+    "nmap_scan": ActionTier.ACTIVE,
+    "subdomain_enum": ActionTier.ACTIVE,
 
     # Active (Exploitation, Brute-Force, Environment Modification) -> ASK by default
     "dir_brute": ActionTier.ACTIVE,
@@ -149,9 +153,10 @@ class PermissionEngine:
                 "ping_host": PermissionDecision.ALLOW,
                 "dns_lookup": PermissionDecision.ALLOW,
                 "whois_lookup": PermissionDecision.ALLOW,
-                "nmap_scan": PermissionDecision.ALLOW,
+                # nmap_scan and subdomain_enum are r3 active enumeration: they hit a
+                # real target and route through approval via the ACTIVE tier — no
+                # explicit ALLOW override here (audit T2.7).
                 "dir_brute": PermissionDecision.ASK,
-                "subdomain_enum": PermissionDecision.ALLOW,
                 "searchsploit": PermissionDecision.ALLOW,
                 "hash_identify": PermissionDecision.ALLOW,
             },
@@ -213,6 +218,28 @@ class PermissionEngine:
         self.persistent_rules[resource.value] = decision
         self._write_persistent_rules()
 
+    def rule_requires_confirmation(
+        self,
+        resource: PermissionResource,
+        decision: PermissionDecision,
+    ) -> bool:
+        """Whether a ``/permissions`` rule is high-impact enough to need an explicit
+        second confirmation before it is applied.
+
+        Mirrors the approval UI's intentional divergence (R11 /
+        ``_SHELL_TOOL_SESSION_ONLY``): a blanket ``allow`` on a privileged/exploit
+        tool (r5+) or on a compound shell command must never be granted on the same
+        one-liner that allows a recon tool like nmap_scan. The two permission-granting
+        paths must not disagree (audit T2.8).
+        """
+        if decision != PermissionDecision.ALLOW:
+            return False
+        if resource.kind == "tool":
+            return _tool_risk_level(resource.name) >= _HIGH_RISK_RULE_FLOOR
+        if resource.kind in ("command", "command_exact", "command_prefix"):
+            return _command_rule_is_high_risk(resource.name)
+        return False
+
     def tool_resource(self, tool_name: str) -> PermissionResource:
         return PermissionResource(kind="tool", name=tool_name)
 
@@ -242,9 +269,13 @@ class PermissionEngine:
 
     def _session_decision(self, resource: PermissionResource) -> Optional[PermissionDecision]:
         exact = self.session_rules.get(resource.value)
+        wildcard = self.session_rules.get(f"{resource.kind}(*)")
+        # A session-wide DENY is an execution lock (used by plan-only mode), not
+        # a default that a later narrow ALLOW may accidentally bypass.
+        if wildcard == PermissionDecision.DENY:
+            return wildcard
         if exact:
             return exact
-        wildcard = self.session_rules.get(f"{resource.kind}(*)")
         if wildcard:
             return wildcard
         return None
@@ -380,21 +411,11 @@ class PermissionEngine:
         if remembered:
             return remembered, self.tool_resource(tool_name)
 
-        # 1. Direct tool rule
+        # Direct tool rule. Argument-sensitive resources (read_file/write_file)
+        # are handled above via evaluate_tool_argument_resource; that path is the
+        # only place file heuristics run — do not re-add an unreachable branch here.
         decision = self.evaluate_tool(tool_name)
         return decision, self.tool_resource(tool_name)
-
-        # 2. File read/write context heuristics
-        if "path" in arguments or "filepath" in arguments:
-            path = str(arguments.get("path") or arguments.get("filepath") or "")
-            if tool_name in ("write_file", "save_file", "export"):
-                resource = PermissionResource(kind="write_file", name=path)
-                return self.check_write_permission(path), resource
-            elif tool_name in ("read_file", "view_file", "file_analysis", "file_analyze"):
-                resource = PermissionResource(kind="read_file", name=path)
-                return self.check_read_permission(path), resource
-
-        return self.default_decision, None
 
     def evaluate_tool_argument_resource(
         self,
@@ -417,7 +438,13 @@ class PermissionEngine:
                 return PermissionDecision.ASK, argument_resource
             return self.check_read_permission(argument_resource.name), argument_resource
         if argument_resource.kind == "write_file":
-            return self.check_write_permission(argument_resource.name), argument_resource
+            decision = self.check_write_permission(argument_resource.name)
+            # Only a categorical DENY (system paths /etc, /bin, /usr) blocks at the
+            # argument level; any other path defers to the tool-level ASK so
+            # write_file prompts exactly once (audit R3.5).
+            if decision == PermissionDecision.DENY:
+                return decision, argument_resource
+            return PermissionDecision.ALLOW, argument_resource
         return PermissionDecision.ALLOW, argument_resource
 
     def tool_argument_resource(
@@ -436,6 +463,11 @@ class PermissionEngine:
         if tool_name == "find_files":
             path = str(args.get("path") or "/").strip() or "/"
             return PermissionResource(kind="read_file", name=path)
+        if tool_name in ("write_file", "save_file", "export"):
+            # Routes the /etc, /bin, /usr write_file DENY (rules["write_file"]) through
+            # check_write_permission instead of leaving it as dead code (audit R3.5).
+            path = str(args.get("path") or args.get("filepath") or "").strip()
+            return PermissionResource(kind="write_file", name=path) if path else None
         return None
 
     def check_command_permission(self, cmd: List[str], command_text: str = "") -> PermissionDecision:
@@ -505,6 +537,36 @@ _ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 _SHELLS = {"bash", "sh", "zsh"}
 
 
+# r5+ (privileged local action, exploit assistance, extension execution, credentialed
+# remote / identity action) is high-impact; a blanket allow on such a tool needs a
+# second explicit confirmation via /permissions (audit T2.8).
+_HIGH_RISK_RULE_FLOOR = 5
+
+
+def _risk_class_level(risk_class) -> int:
+    """Numeric r-level from a ToolRiskClass value like 'r5_privileged_local_action'."""
+    try:
+        return int(str(getattr(risk_class, "value", risk_class)).split("_", 1)[0].lstrip("r"))
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _tool_risk_level(tool_name: str) -> int:
+    """Best-effort r-level for a tool via the live registry, then the static map."""
+    try:
+        from secops_agent.core.tools import _BUILTIN_TOOL_RISK_CLASSES, registry
+
+        tool_def = registry.get_tool(tool_name)
+        risk_class = getattr(tool_def, "risk_class", None) if tool_def else None
+        if risk_class is None:
+            risk_class = _BUILTIN_TOOL_RISK_CLASSES.get(tool_name)
+        if risk_class is not None:
+            return _risk_class_level(risk_class)
+    except Exception:
+        pass
+    return 0
+
+
 def _normalize_command_prefix(command: str) -> str:
     return re.sub(r"\s+", " ", str(command or "").strip())
 
@@ -531,6 +593,19 @@ _EXACT_ONLY_COMMANDS = {
     "truncate",
     "umount",
 }
+
+
+def _command_rule_is_high_risk(command: str) -> bool:
+    """A compound/chained command, or one whose executable the default policy treats
+    as exact-only (rm, chmod, sudo, …), must not receive a blanket allow via
+    /permissions without a second confirmation (audit T2.8)."""
+    text = _normalize_command_prefix(command)
+    if not text:
+        return False
+    if any(marker in text for marker in _UNSAFE_PREFIX_EXTENSION_MARKERS):
+        return True
+    executable = text.split(" ", 1)[0].rsplit("/", 1)[-1]
+    return executable in _EXACT_ONLY_COMMANDS
 
 
 def _command_prefix_matches(prefix: str, command: str) -> bool:

@@ -64,12 +64,29 @@ SECOPS_SYSTEM_INSTRUCTION = (
     "- Detect the OS locally (`sysinfo`) instead of asking. For sudo, rely on the permission flow; "
     "if non-interactive or auth fails, give the exact manual command instead of retrying blindly.\n\n"
 
-    "## Format — make the answer scannable\n"
-    "- Put every concrete value in `code`: IPs, ports, paths, URLs, CVEs, service/version, flags, filenames.\n"
-    "- **Bold** the verdict and any severity word: **open**, **vulnerable**, **CRITICAL**, **active**, **failed**.\n"
-    "- Use `##` headers to separate sections in longer findings; skip headers for one-line replies.\n"
-    "- Tables for structured data (ports, services, findings). Numbered lists as `1. Item`.\n"
-    "- Emoji only as sparse anchors (🎯 ✅ ❌ ⚠️ 🚨 🔑 🏁). Never leave a key fact as flat prose.\n"
+    "## Terminal output standard\n"
+    "- Write a polished operator-facing answer, never a raw transcript, a generic introduction, "
+    "or a restatement of the request. The first line is the verdict or direct answer.\n"
+    "- Choose the smallest shape that communicates the result: one line for a fact; a verdict plus "
+    "up to three evidence bullets after a tool; and, only for a material finding, `## Verdict`, "
+    "`## Evidence`, `## Impact`, and `## Recommendation`. Omit empty sections.\n"
+    "- Use headings only for answers longer than three lines, at most three `##` headings, and never "
+    "use heading levels below `##`. Keep one blank line between sections.\n"
+    "- Use a table only when comparing at least three rows on the same fields. Otherwise prefer short "
+    "bullets. Keep bullets to one sentence and put the operator's next decision last.\n"
+    "- Put literal values in `code` (IPs, ports, paths, URLs, CVEs, versions, filenames), but never "
+    "wrap whole sentences in code. Bold only the verdict or severity — no more than three bold spans.\n"
+    "- A single status marker (✅, ⚠️, or ❌) may prefix the verdict. Do not decorate every line and do "
+    "not use emoji as a substitute for wording.\n"
+
+    "## Response recipes — copy the shape, not the language\n"
+    "- Direct answer: `**Yes — the VPN is connected via tun0.**`\n"
+    "- Scan result: `## Verdict` → one bold outcome; `## Evidence` → up to three concise facts; "
+    "`## Next step` → one decision only when an action is needed.\n"
+    "- Finding: `## Verdict` → severity and affected target; `## Evidence` → observed proof; "
+    "`## Recommendation` → concrete remediation. Mention impact in the verdict or recommendation unless "
+    "it needs its own section.\n"
+    "- Blocked action: `⚠️ **Action not executed.**` followed by the exact reason and one safe way to proceed.\n"
 )
 
 @dataclass
@@ -222,10 +239,9 @@ class GeminiProvider:
                 "- Maintain the same concise terminal-agent interaction style.\n"
                 "- Do not expose hidden reasoning or thoughts.\n"
                 "- Do not restate the user's task or request.\n"
-                "- Keep numbered lists in `1. Item` format.\n"
-                "- Emphasise key facts: `code` for values (IPs, ports, paths, CVEs, versions), "
-                "**bold** for the verdict and severity words.\n"
-                "- Use `##` headers to separate sections in longer answers; omit them for one-line replies."
+                "- Follow the Terminal output standard exactly; prefer a compact verdict and evidence "
+                "over a generic security report.\n"
+                "- Keep numbered lists in `1. Item` format."
             )
             parts.append(contract)
         elif profile.name == "gemma" or profile.name.startswith("gemma"):
@@ -234,9 +250,9 @@ class GeminiProvider:
                 "- Maintain the same concise terminal-agent interaction style.\n"
                 "- You are part of elite Security Operations.\n"
                 "- Use tools only when they materially improve accuracy.\n"
-                "- Keep numbered lists in `1. Item` format.\n"
-                "- Emphasise key facts: `code` for values (IPs, ports, paths, CVEs, versions), "
-                "**bold** for the verdict and severity words."
+                "- Follow the Terminal output standard exactly; prefer a compact verdict and evidence "
+                "over a generic security report.\n"
+                "- Keep numbered lists in `1. Item` format."
             )
             parts.append(contract)
 

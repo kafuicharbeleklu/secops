@@ -43,6 +43,29 @@ from secops_agent.core.result_parsers.system import (
     parse_run_shell_output,
     parse_generic_output,
 )
+from secops_agent.core.result_parsers.observation import (
+    parse_ping_output,
+    parse_port_check_output,
+    parse_subdomain_enum_output,
+    parse_tech_detect_output,
+    parse_traceroute_output,
+    parse_waf_detect_output,
+)
+from secops_agent.core.result_parsers.local import (
+    parse_connect_vpn_config_output,
+    parse_disconnect_vpn_output,
+    parse_exploit_info_output,
+    parse_file_analyze_output,
+    parse_find_files_output,
+    parse_generate_payload_output,
+    parse_hash_generate_output,
+    parse_hash_identify_output,
+    parse_lab_setup_check_output,
+    parse_log_analyze_output,
+    parse_password_strength_output,
+    parse_sysinfo_output,
+    parse_vpn_status_output,
+)
 
 
 _PARSERS: Dict[str, Callable[[str, Dict[str, Any]], ParsedResult]] = {
@@ -67,6 +90,27 @@ _PARSERS: Dict[str, Callable[[str, Dict[str, Any]], ParsedResult]] = {
     "fetch_url": parse_fetch_url_output,
     "webshell_exec": parse_webshell_exec_output,
     "start_listener": parse_start_listener_output,
+    # OBSERVE parsers for the six former blind spots (audit R3.3).
+    "subdomain_enum": parse_subdomain_enum_output,
+    "tech_detect": parse_tech_detect_output,
+    "waf_detect": parse_waf_detect_output,
+    "port_check": parse_port_check_output,
+    "ping_host": parse_ping_output,
+    "traceroute": parse_traceroute_output,
+    # Local evidence and helper outputs also update the structured mission view.
+    "connect_vpn_config": parse_connect_vpn_config_output,
+    "disconnect_vpn": parse_disconnect_vpn_output,
+    "exploit_info": parse_exploit_info_output,
+    "file_analyze": parse_file_analyze_output,
+    "find_files": parse_find_files_output,
+    "generate_payload": parse_generate_payload_output,
+    "hash_generate": parse_hash_generate_output,
+    "hash_identify": parse_hash_identify_output,
+    "lab_setup_check": parse_lab_setup_check_output,
+    "log_analyze": parse_log_analyze_output,
+    "password_strength": parse_password_strength_output,
+    "sysinfo": parse_sysinfo_output,
+    "vpn_status": parse_vpn_status_output,
 }
 
 
@@ -144,6 +188,14 @@ class ToolResultParser:
                 finding.phase = self.mission.phase.value
                 self.mission.upsert_finding(finding)
             self.mission.refresh_phase_from_state()
+            # Cache the parsed scan so a same-mission deterministic-preflight
+            # follow-up ("how many ports?") can answer without re-running the
+            # scan or re-prompting for approval. This is the ONLY write path into
+            # the scan cache and is reached only for a genuine, approved execution
+            # (agent.py OBSERVE gate), so untrusted lesson/KB/tool-output text has
+            # no way to populate it. record_scan_result ignores non-scan tools.
+            if hasattr(self.mission, "record_scan_result"):
+                self.mission.record_scan_result(tool_name, args, result)
 
         return result
 

@@ -601,12 +601,30 @@ def build_artifacts_view_lines(
     artifacts = list(artifacts if artifacts is not None else (getattr(runtime, "artifacts", []) or []))
     selected = min(max(0, selected), max(0, len(artifacts) - 1))
     has_detail = bool(artifacts and detail_mode in {"preview", "open"})
-    fixed_rows = 5 + (7 if has_detail else 0)
+
+    # Findings lead (audit item #7 / T2.2): a discovery-ordered digest of the
+    # `finding` artifacts, above the raw evidence registry. Additive summary only —
+    # it does not reorder or renumber the nav index below, which still spans every
+    # artifact.
+    finding_artifacts = [a for a in artifacts if getattr(a, "kind", "") == "finding"]
+    finding_summary: list[str] = []
+    if finding_artifacts:
+        finding_summary.append("")
+        finding_summary.append(f"  Findings ({len(finding_artifacts)})")
+        for artifact in finding_artifacts[:6]:
+            severity = str((getattr(artifact, "metadata", {}) or {}).get("severity", "")).strip()
+            tag = f"[{severity}] " if severity else ""
+            finding_summary.append(_fit_cell(f"    • {tag}{artifact.title}", width))
+        if len(finding_artifacts) > 6:
+            finding_summary.append(f"    … and {len(finding_artifacts) - 6} more")
+
+    fixed_rows = 5 + (7 if has_detail else 0) + len(finding_summary)
     visible_count = min(len(artifacts), max(1, height - fixed_rows))
     start = _settings_window_start(selected, len(artifacts), visible_count)
     visible = artifacts[start:start + visible_count]
 
     lines = ["", title]
+    lines.extend(finding_summary)
     if not artifacts:
         lines.append(f"  {empty_message}")
     else:

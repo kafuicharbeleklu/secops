@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from secops_agent.core.agent import SecOpsAgent
+from secops_agent.core.agent import PlanPreviewEvent, SecOpsAgent
 from secops_agent.core.llm import Message, StreamChunk, ToolCallChunk
 from secops_agent.core.memory import ConversationMemory
 from secops_agent.core.mission import MissionContext
@@ -110,8 +110,9 @@ class StructuredCapabilityTests(unittest.IsolatedAsyncioTestCase):
             max_iterations=2,
         )
 
-        async for _ in agent.stream_response("scan 10.10.10.5"):
-            pass
+        async for _event in agent.stream_response("scan 10.10.10.5"):
+            if isinstance(_event, PlanPreviewEvent) and _event.acknowledgment_future is not None:
+                _event.acknowledgment_future.set_result(True)
 
         self.assertEqual(llm.calls, 2)
         self.assertEqual(len(mission.hosts), 1)

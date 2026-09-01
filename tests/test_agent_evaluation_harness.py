@@ -4,6 +4,7 @@ import unittest
 
 from secops_agent.core.agent import (
     ErrorEvent,
+    PlanPreviewEvent,
     SecOpsAgent,
     TextEvent,
     ToolResultEvent,
@@ -91,6 +92,8 @@ async def _collect_events(agent: SecOpsAgent, prompt: str = "run scenario"):
     events = []
     async for event in agent.stream_response(prompt):
         events.append(event)
+        if isinstance(event, PlanPreviewEvent) and event.acknowledgment_future is not None:
+            event.acknowledgment_future.set_result(True)
     return events
 
 

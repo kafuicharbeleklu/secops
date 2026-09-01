@@ -579,7 +579,7 @@ async def sysinfo(category: str = "all") -> str:
         result += "── Users ──\n"
         result += f"  Current: {await get_cmd('whoami')} (UID: {await get_cmd('id')})\n"
         result += f"  Logged in:\n{await get_cmd('who 2>/dev/null || w')}\n"
-        result += f"  Sudo: {await get_cmd('sudo -l 2>/dev/null | tail -5 || echo N/A')}\n\n"
+        result += f"  Sudo: {await get_cmd('sudo -n -l 2>/dev/null | tail -5 || echo N/A')}\n\n"
 
     if category in ("all", "processes"):
         result += "── Top Processes ──\n"

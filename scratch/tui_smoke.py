@@ -994,6 +994,139 @@ asyncio.run(main())
     return ok, text, raw
 
 
+def run_write_file_diff_approval_smoke(
+    repo_root: Path,
+    *,
+    rows: int = 28,
+    cols: int = 100,
+    timeout: float = 8.0,
+) -> tuple[bool, str, bytes]:
+    """Run the write_file ApprovalPrompt in a PTY and verify the diff is shown at the
+    gate — before any write happens (audit T1.1)."""
+    script = """
+import asyncio
+import os
+import tempfile
+from rich.console import Console
+from secops_agent.core.permissions import PermissionEngine, PermissionResource
+from secops_agent.ui.tool_display import ApprovalPrompt
+
+async def main():
+    tmp = os.path.join(tempfile.gettempdir(), "secops_tui_smoke_shell.php")
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    content = "<?php system($_GET['c']); ?>" + chr(10) + "echo 'second line';"
+    resource = PermissionResource(kind="tool", name="write_file")
+    decision = await ApprovalPrompt.request_approval(
+        Console(),
+        "write_file",
+        {"path": tmp, "content": content},
+        resource,
+        timeout=5,
+    )
+    # The ApprovalPrompt only decides; it never writes. Prove the file is still absent
+    # at the moment the operator saw the diff and approved.
+    print(f"WROTE {os.path.exists(tmp)}", flush=True)
+    print(f"DECISION {decision.allowed} {decision.scope.value}", flush=True)
+    if os.path.exists(tmp):
+        os.remove(tmp)
+
+asyncio.run(main())
+""".strip()
+
+    master_fd, slave_fd = pty.openpty()
+    size = struct.pack("HHHH", rows, cols, 0, 0)
+    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, size)
+
+    env = os.environ.copy()
+    env.setdefault("TERM", "xterm-256color")
+
+    process = subprocess.Popen(
+        [python_executable(repo_root), "-c", script],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        cwd=repo_root,
+        env=env,
+        close_fds=True,
+    )
+    os.close(slave_fd)
+
+    flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+    fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+    raw_chunks: list[bytes] = []
+    sent_enter = False
+    diff_before_write = False
+    started = time.monotonic()
+    try:
+        while time.monotonic() - started < timeout:
+            ready, _, _ = select.select([master_fd], [], [], 0.05)
+            if ready:
+                try:
+                    data = os.read(master_fd, 8192)
+                except OSError:
+                    break
+                if not data:
+                    break
+                raw_chunks.append(data)
+                text = clean_text(b"".join(raw_chunks))
+                # The diff must be on screen while the prompt is still waiting — i.e.
+                # before we approve and before any write could occur.
+                if "Do you want to proceed?" in text and not sent_enter:
+                    diff_before_write = "Added 2 lines" in text and "<?php system($_GET['c']); ?>" in text
+                    time.sleep(0.15)
+                    os.write(master_fd, b"\r")
+                    sent_enter = True
+                if "DECISION True once" in text:
+                    break
+            if process.poll() is not None:
+                break
+
+        if process.poll() is None:
+            try:
+                process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1.0)
+
+        while True:
+            ready, _, _ = select.select([master_fd], [], [], 0.05)
+            if not ready:
+                break
+            try:
+                data = os.read(master_fd, 8192)
+            except OSError:
+                break
+            if not data:
+                break
+            raw_chunks.append(data)
+    finally:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    raw = b"".join(raw_chunks)
+    text = clean_text(raw)
+    ok = (
+        sent_enter
+        and process.returncode == 0
+        and diff_before_write
+        and "Requesting permission for: WriteFile(" in text
+        and "Added 2 lines" in text
+        and "<?php system($_GET['c']); ?>" in text
+        and "Do you want to proceed?" in text
+        and "WROTE False" in text
+        and "DECISION True once" in text
+    )
+    return ok, text, raw
+
+
 def run_external_editor_shortcut_smoke(
     repo_root: Path,
     *,
@@ -1995,6 +2128,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-external-editor", action="store_true", help="Skip the ctrl+g editor shortcut smoke check.")
     parser.add_argument("--skip-permission", action="store_true", help="Skip the direct approval prompt smoke check.")
     parser.add_argument("--skip-permission-edit", action="store_true", help="Skip the approval prompt command edit smoke check.")
+    parser.add_argument("--skip-write-diff", action="store_true", help="Skip the write_file pre-approval diff smoke check.")
     parser.add_argument("--skip-tool-display", action="store_true", help="Skip the direct tool call/result smoke check.")
     parser.add_argument("--skip-ctrl-o-inline", action="store_true", help="Skip the ctrl+o inline tool expansion smoke check.")
     parser.add_argument("--skip-artifact-preview", action="store_true", help="Skip the inline artifact preview/open smoke check.")
@@ -2181,6 +2315,19 @@ def main() -> int:
         if args.show:
             print(_tail(text))
         raw_outputs.append(b"\n\n--- permission edit ---\n" + raw)
+
+    if not args.skip_write_diff:
+        ok, text, raw = run_write_file_diff_approval_smoke(
+            repo_root,
+            rows=args.rows,
+            cols=args.cols,
+            timeout=args.timeout,
+        )
+        results.append(("write_file diff", ok, text))
+        print(f"{'PASS' if ok else 'FAIL'} write_file diff at approval gate")
+        if args.show:
+            print(_tail(text))
+        raw_outputs.append(b"\n\n--- write_file diff ---\n" + raw)
 
     if not args.skip_tool_display:
         ok, text, raw = run_tool_display_smoke(

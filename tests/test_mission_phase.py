@@ -7,6 +7,7 @@ from secops_agent.core.mission import (
     Finding,
     Host,
     MissionContext,
+    POST_EXPLOITATION_BOUNDARY,
     PentestPhase,
     Service,
 )
@@ -89,6 +90,16 @@ class MissionPhaseTests(unittest.TestCase):
 
         self.assertEqual(mission.phase, PentestPhase.POST_EXPLOITATION)
         self.assertIn("credentials", mission.phase_reason.lower())
+        self.assertTrue(mission.post_exploitation_boundary_active)
+
+    def test_post_exploitation_prompt_marks_non_intrusive_product_boundary(self):
+        mission = MissionContext(name="phase test")
+        mission.transition_phase(PentestPhase.POST_EXPLOITATION, "authorized evidence recorded")
+
+        summary = mission.build_prompt_summary()
+
+        self.assertIn("Product boundary", summary)
+        self.assertIn(POST_EXPLOITATION_BOUNDARY, summary)
 
     def test_refresh_does_not_regress_phase_by_default(self):
         mission = MissionContext(name="phase test")

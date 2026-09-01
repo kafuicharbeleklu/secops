@@ -4,6 +4,7 @@ import unittest
 
 from secops_agent.core.agent import (
     ApprovalRequestEvent,
+    PlanPreviewEvent,
     SecOpsAgent,
     ToolCallEvent,
     ToolResultEvent,
@@ -52,6 +53,8 @@ async def _collect_events(agent: SecOpsAgent):
         events.append(event)
         if isinstance(event, ApprovalRequestEvent):
             event.approval_future.set_result(False)
+        elif isinstance(event, PlanPreviewEvent) and event.acknowledgment_future is not None:
+            event.acknowledgment_future.set_result(True)
     return events
 
 

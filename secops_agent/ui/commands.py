@@ -5,6 +5,7 @@ Slash command metadata shared by the prompt completer and help renderer.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from difflib import get_close_matches
 from typing import Iterable
 
 
@@ -46,6 +47,8 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("/lessons", "Review and validate cross-mission lessons", "Session", usage="/lessons [list | review <id> <reviewed|blocked|deprecated> [note]]"),
     CommandSpec("/model", "Switch the active model", "Configuration", usage="/model [auto|gemini|gemma|gemma-high|gemma-31b-off|gemma-31b]"),
     CommandSpec("/permissions", "Show or edit tool approval policy", "Configuration", alias="/permission", usage="/permissions [allow|ask|deny|clear] <resource>"),
+    CommandSpec("/plan", "Review the mission plan or narrow its scope", "Session", usage="/plan [scope <target>]"),
+    CommandSpec("/report", "Generate a structured pentest report from mission evidence", "Session", usage="/report [name]"),
     CommandSpec("/resume", "Resume a previous conversation", "Session"),
     CommandSpec("/rewind", "Restore an earlier checkpoint", "Session"),
     CommandSpec("/sandbox", "Show or toggle restricted command execution", "Configuration", usage="/sandbox [on|off|status]"),
@@ -83,3 +86,20 @@ def iter_commands(include_aliases: bool = False) -> Iterable[CommandSpec]:
 def get_command(name: str) -> CommandSpec | None:
     canonical = ALIASES.get(name, name)
     return next((spec for spec in COMMANDS if spec.name == canonical), None)
+
+
+def suggest_command(name: str) -> CommandSpec | None:
+    """Return one close canonical command for a likely spelling mistake.
+
+    The conservative cutoff avoids turning an unrelated command into a
+    misleading recommendation.  Aliases participate in matching, but callers
+    always receive the canonical command and its usage text.
+    """
+    candidate = str(name or "").strip().casefold()
+    if not candidate:
+        return None
+
+    names = {spec.name: spec for spec in COMMANDS}
+    names.update({alias: get_command(target) for alias, target in ALIASES.items()})
+    matches = get_close_matches(candidate, names, n=1, cutoff=0.74)
+    return names[matches[0]] if matches else None

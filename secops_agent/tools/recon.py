@@ -42,7 +42,9 @@ async def whois_lookup(target: str) -> str:
         "domain": {"type": "string", "description": "Target domain to enumerate subdomains for", "required": True},
         "method": {"type": "string", "description": "Method: 'passive' (subfinder/API), 'brute' (DNS brute force with common list)", "required": False, "default": "passive"},
     },
-    dangerous=False,
+    # r3 active enumeration hits a real target (esp. `brute`): dangerous=True so the
+    # dangerous flag agrees with risk_class and it routes through approval (audit T2.7).
+    dangerous=True,
 )
 async def subdomain_enum(domain: str, method: str = "passive") -> str:
     """Enumerate subdomains for a domain."""

@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,9 @@ from typing import Any
 from secops_agent import __version__
 from secops_agent.core.sandbox import validate_exec_command
 from secops_agent.core.tools import ToolCategory, ToolRegistry, report_progress
+
+
+MCP_PROTOCOL_VERSION = "2025-11-25"
 
 
 @dataclass(frozen=True)
@@ -101,16 +105,41 @@ class MCPServerSession:
         await self.request(
             "initialize",
             {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {"tools": {}},
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": True}},
                 "clientInfo": {"name": "secops-agent", "version": __version__},
             },
             timeout=10,
         )
         await self.notify("notifications/initialized")
-        tools_result = await self.request("tools/list", {}, timeout=10)
-        raw_tools = tools_result.get("tools", []) if isinstance(tools_result, dict) else []
-        self.tools = [tool for tool in raw_tools if isinstance(tool, dict) and tool.get("name")]
+        await self._load_tools()
+
+    async def _load_tools(self) -> None:
+        """Load every page of the MCP tool catalogue.
+
+        A partial catalogue is a safety problem as well as a compatibility bug:
+        an operator cannot review a capability which a client silently omitted.
+        """
+        tools: list[dict[str, Any]] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            params = {"cursor": cursor} if cursor else {}
+            tools_result = await self.request("tools/list", params, timeout=10)
+            if not isinstance(tools_result, dict):
+                break
+            raw_tools = tools_result.get("tools", [])
+            if isinstance(raw_tools, list):
+                tools.extend(
+                    tool for tool in raw_tools
+                    if isinstance(tool, dict) and tool.get("name")
+                )
+            next_cursor = tools_result.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        self.tools = tools
 
     async def stop(self):
         for future in self._pending.values():
@@ -263,8 +292,18 @@ class MCPRuntime:
         for tool in session.tools:
             remote_name = str(tool["name"])
             registry_name = _registry_tool_name(session.config.name, remote_name, self.tool_bindings)
-            description = str(tool.get("description") or f"MCP tool {remote_name} from {session.config.name}")
-            parameters = _mcp_schema_to_parameters(tool.get("inputSchema", {}))
+            # Tool descriptions, annotations and parameter prose originate on a
+            # third-party server.  They are not a trust signal and must not become
+            # an instruction channel to the model.  Keep only structural schema
+            # information; every MCP tool is independently classified as r7 below.
+            safe_remote_name = _safe_identifier(remote_name)
+            description = (
+                f"External MCP tool '{safe_remote_name}' from approved server "
+                f"'{_safe_identifier(session.config.name)}'. Requires confirmation."
+            )
+            parameters = _mcp_schema_to_parameters(
+                tool.get("inputSchema", {}), include_descriptions=False
+            )
 
             async def _call_mcp_tool(_remote_name=remote_name, _server_name=session.config.name, **kwargs):
                 await report_progress("calling MCP tool", f"{_server_name}.{_remote_name}")
@@ -418,13 +457,49 @@ def _parse_server(
 
 
 def _mcp_server_hash(command: str, args: list[str], env: dict[str, str]) -> str:
+    """Fingerprint the launch declaration *and* resolved local launch artifacts.
+
+    Trusting only ``python server.py`` leaves the approval valid after either the
+    interpreter or ``server.py`` changes.  Missing/unresolvable paths are retained
+    in the hash so a later file appearance also forces review.
+    """
     payload = {
         "command": str(command),
         "args": [str(arg) for arg in args],
         "env": {str(key): str(value) for key, value in sorted(env.items())},
+        "launch_artifacts": [
+            _mcp_launch_artifact_fingerprint(command),
+            *(_mcp_launch_artifact_fingerprint(arg) for arg in args),
+        ],
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _mcp_launch_artifact_fingerprint(value: str) -> dict[str, str]:
+    """Return a stable identity and content hash for a local launch artifact."""
+    raw = str(value or "").strip()
+    candidate: Path | None = None
+    if raw:
+        path = Path(raw).expanduser()
+        if path.is_absolute() or path.exists():
+            candidate = path
+        elif "/" not in raw and "\\" not in raw:
+            resolved = shutil.which(raw)
+            candidate = Path(resolved) if resolved else None
+    if candidate is None:
+        return {"value": raw, "state": "unresolved"}
+    try:
+        resolved = candidate.resolve(strict=True)
+        if not resolved.is_file():
+            return {"value": raw, "path": str(resolved), "state": "not_file"}
+        digest = hashlib.sha256()
+        with resolved.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return {"value": raw, "path": str(resolved), "sha256": digest.hexdigest()}
+    except OSError:
+        return {"value": raw, "state": "unreadable"}
 
 
 def _mcp_start_environment(config_env: dict[str, str]) -> dict[str, str]:
@@ -461,7 +536,11 @@ def _safe_identifier(value: str) -> str:
     return safe
 
 
-def _mcp_schema_to_parameters(schema: Any) -> dict[str, Any]:
+def _mcp_schema_to_parameters(
+    schema: Any,
+    *,
+    include_descriptions: bool = True,
+) -> dict[str, Any]:
     if not isinstance(schema, dict):
         return {}
     properties = schema.get("properties", {})
@@ -476,12 +555,28 @@ def _mcp_schema_to_parameters(schema: Any) -> dict[str, Any]:
         normalized = _normalize_mcp_schema_definition(definition)
         normalized.update(
             {
-                "description": str(definition.get("description") or definition.get("title") or ""),
                 "required": str(name) in required,
             }
         )
+        if include_descriptions:
+            normalized["description"] = str(
+                definition.get("description") or definition.get("title") or ""
+            )
+        else:
+            _strip_schema_descriptions(normalized)
         parameters[str(name)] = normalized
     return parameters
+
+
+def _strip_schema_descriptions(value: Any) -> None:
+    """Remove server-supplied prose recursively, retaining only schema shape."""
+    if isinstance(value, dict):
+        value.pop("description", None)
+        for child in value.values():
+            _strip_schema_descriptions(child)
+    elif isinstance(value, list):
+        for child in value:
+            _strip_schema_descriptions(child)
 
 
 def _normalize_mcp_schema_definition(definition: dict[str, Any]) -> dict[str, Any]:
