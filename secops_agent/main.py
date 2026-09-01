@@ -1471,6 +1471,10 @@ async def run_chat_loop(
                                 except Exception:
                                     pass
                                 input_handler.refresh_theme()
+                                # Drop ctrl+o caches built with the previous palette
+                                # so an expand/collapse can't replay stale-coloured
+                                # markup into the newly themed flow.
+                                runtime.reset_ctrl_o_surface(clear_anchor=True)
                                 save_theme_preference(resolved)
                                 renderer.render_success(
                                     f"Theme set to {resolved} and saved for the next launch."
@@ -1491,6 +1495,9 @@ async def run_chat_loop(
                             except Exception:
                                 pass
                             input_handler.refresh_theme()
+                            # Drop ctrl+o caches built with the previous palette so an
+                            # expand/collapse can't replay stale-coloured markup.
+                            runtime.reset_ctrl_o_surface(clear_anchor=True)
                             save_theme_preference(resolved)
                             renderer.render_success(
                                 f"Theme set to {resolved} and saved for the next launch."
