@@ -43,7 +43,7 @@ pt_prompt = importlib.import_module("prompt_toolkit.shortcuts.prompt")
 
 COMPLETION_MENU_RESERVED_ROWS = 0
 SLASH_COMPLETION_VISIBLE_ROWS = 5
-ROOT_COMPLETION_HIDDEN_COMMANDS = {"/task", "/tool"}
+ROOT_COMPLETION_HIDDEN_COMMANDS = {"/task"}
 
 
 def _terminal_width(default: int = 80) -> int:
@@ -826,7 +826,7 @@ class SlashCommandCompleter(Completer):
                             start_position=-len(arg),
                             display=_completion_display(action, "Sandbox action"),
                         )
-            elif canonical_cmd == "/tool":
+            elif canonical_cmd == "/tools":
                 for label, description in _tool_completion_rows():
                     tool_name = label.split(" ", 1)[1]
                     if tool_name.startswith(arg):
@@ -849,14 +849,6 @@ class SlashCommandCompleter(Completer):
                     spec.name,
                     start_position=-len(text),
                     display=_completion_display(spec.name, meta),
-                )
-        for label, description in _tool_completion_rows():
-            tool_shortcut = "/" + label.split(" ", 1)[1]
-            if label.startswith(text) or tool_shortcut.startswith(text):
-                yield PTCompletion(
-                    label,
-                    start_position=-len(text),
-                    display=_completion_display(label, description),
                 )
 
 

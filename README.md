@@ -114,8 +114,7 @@ Core workflow:
 
 ```text
 /help
-/tools
-/tool <name>
+/tools [name]
 /context
 /history
 /trajectory

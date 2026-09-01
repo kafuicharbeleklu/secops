@@ -1250,16 +1250,7 @@ async def run_chat_loop(
                         _render_header_banner(renderer, agent.llm.model_name)
                         renderer.render_welcome()
                     elif canonical_cmd == "/tools":
-                        renderer.render_tools(
-                            registry.list_tools(),
-                            transient=interactive_surface,
-                            status_right=_status_right(agent, runtime),
-                            prompt_frame=interactive_surface,
-                        )
-                        if interactive_surface:
-                            renderer.render_user_input(stripped, trailing_blank=False, separator=False)
-                            renderer.render_status("Exited /tools command")
-                    elif canonical_cmd == "/tool":
+                        # /tools lists; /tools <name> (or the /tool alias) shows detail.
                         tool_arg = parse_tool_argument(arg)
                         if tool_arg.action == "list":
                             renderer.render_tools(
@@ -1270,7 +1261,7 @@ async def run_chat_loop(
                             )
                             if interactive_surface:
                                 renderer.render_user_input(stripped, trailing_blank=False, separator=False)
-                                renderer.render_status("Exited /tool command")
+                                renderer.render_status("Exited /tools command")
                             continue
                         tool_def = registry.get_tool(tool_arg.tool_name)
                         if tool_def is None:

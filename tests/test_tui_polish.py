@@ -171,25 +171,32 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("/tools", tool_labels)
         self.assertNotIn("/tool", tool_labels)
 
-    def test_slash_completion_exposes_registered_tools_as_tool_entries(self):
+    def test_root_slash_completion_omits_individual_tool_entries(self):
+        # /tools already gives the detailed overview; the root menu must not be
+        # flooded with one /tool <name> entry per registered tool.
         completer = SlashCommandCompleter()
-        completions = list(completer.get_completions(Document("/n", cursor_position=len("/n")), None))
-
-        labels = [item.text for item in completions]
-        self.assertIn("/tool nmap_scan", labels)
-
-        nmap = next(item for item in completions if item.text == "/tool nmap_scan")
-        self.assertIn("nmap_scan", str(nmap.display))
-        self.assertIn("network", str(nmap.display))
+        for probe in ("/", "/n", "/tool"):
+            labels = [
+                item.text
+                for item in completer.get_completions(
+                    Document(probe, cursor_position=len(probe)), None
+                )
+            ]
+            self.assertNotIn("/tool nmap_scan", labels)
+            self.assertFalse(
+                any(label.startswith("/tool ") for label in labels),
+                f"per-tool entries leaked into root completion for {probe!r}: {labels}",
+            )
 
     def test_tool_argument_completion_lists_registered_tool_names(self):
         completer = SlashCommandCompleter()
-        completions = list(
-            completer.get_completions(Document("/tool nm", cursor_position=len("/tool nm")), None)
-        )
-
-        self.assertIn("nmap_scan", [item.text for item in completions])
-        self.assertTrue(all(not item.text.startswith("/tool ") for item in completions))
+        # canonical "/tools <name>" and its "/tool" alias both complete tool names
+        for prefix in ("/tools nm", "/tool nm"):
+            completions = list(
+                completer.get_completions(Document(prefix, cursor_position=len(prefix)), None)
+            )
+            self.assertIn("nmap_scan", [item.text for item in completions])
+            self.assertTrue(all(not item.text.startswith("/") for item in completions))
 
     def test_model_completion_has_no_meta_column(self):
         completer = SlashCommandCompleter()
