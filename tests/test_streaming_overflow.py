@@ -13,7 +13,13 @@ from __future__ import annotations
 
 import unittest
 
-from secops_agent.ui.renderer import _streaming_tail
+import asyncio
+import io
+
+from rich.console import Console
+
+from secops_agent.core.agent import TextEvent, ThinkingEvent
+from secops_agent.ui.renderer import Renderer, _StripTrailingWhitespace, _streaming_tail
 
 
 class StreamingTailTests(unittest.TestCase):
@@ -40,6 +46,46 @@ class StreamingTailTests(unittest.TestCase):
         out = _streaming_tail(body, 28)
         self.assertIn("unique-39", out)
         self.assertNotIn("unique-0", out)
+
+
+
+class TrailingWhitespaceTests(unittest.TestCase):
+    """#6: the flushed streamed answer must not carry right-side padding spaces
+    into scrollback (they survive copy-paste). The Segment-level stripper runs
+    through console.print, so recording and ctrl+o line accounting are intact."""
+
+    def _content_lines_with_trailing_ws(self, output: str) -> list[str]:
+        return [ln for ln in output.split("\n") if ln.strip() and ln != ln.rstrip()]
+
+    def test_streamed_answer_has_no_trailing_whitespace(self) -> None:
+        renderer = Renderer()
+        renderer.console = Console(width=72, record=True, force_terminal=False, file=io.StringIO())
+
+        async def events():
+            yield ThinkingEvent("Analyzing")
+            yield TextEvent("## Resume\n\nLe port 22 est ouvert.\n\n- point un\n- point deux")
+            yield TextEvent("", done=True)
+
+        asyncio.run(renderer.render_agent_stream(events()))
+        output = renderer.console.export_text()
+        self.assertEqual(self._content_lines_with_trailing_ws(output), [])
+        # content is preserved, not truncated
+        self.assertIn("Le port 22 est ouvert.", output)
+        self.assertIn("point deux", output)
+
+    def test_stripper_preserves_line_count(self) -> None:
+        from rich.markdown import Markdown
+        from rich.padding import Padding
+
+        text = "alpha\n\nbeta\n\n- one\n- two"
+        base = Padding(Markdown(text), (0, 0, 0, 2))
+
+        def lines(renderable):
+            con = Console(width=50, record=True, force_terminal=False, file=io.StringIO())
+            con.print(renderable)
+            return [ln.rstrip() for ln in con.export_text().split("\n")]
+
+        self.assertEqual(lines(base), lines(_StripTrailingWhitespace(base)))
 
 
 if __name__ == "__main__":

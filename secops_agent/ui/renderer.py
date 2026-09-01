@@ -39,6 +39,7 @@ from rich.markdown import Markdown
 from rich.live import Live
 from rich.markup import escape
 from rich.padding import Padding
+from rich.segment import Segment
 
 from secops_agent import __version__
 from secops_agent.ui.theme import rich_theme, COLORS, friendly_model_name, reduced_motion
@@ -339,6 +340,38 @@ def _build_tool_transcript_block_lines(
         f"[{indicator_color}]●[/{indicator_color}] {call_markup}{expand_suffix}",
         *_build_collapsed_tool_result_lines(result, width=width),
     ]
+
+
+class _StripTrailingWhitespace:
+    """Render wrapper that drops right-side padding whitespace from every line (#6).
+
+    Rich pads block renderables (Markdown, Padding) to the full console width, so
+    the streamed answer carries trailing spaces into scrollback and copy-paste.
+    This renders the inner renderable to un-padded segment lines and rstrips the
+    trailing *unstyled* whitespace only: line count and styling are preserved, and
+    a styled background fill (e.g. a code-block background) keeps its padding.
+    """
+
+    def __init__(self, renderable: Any) -> None:
+        self._renderable = renderable
+
+    def __rich_console__(self, console: "Console", options: Any):
+        for line in console.render_lines(self._renderable, options, pad=False):
+            segs = list(line)
+            while segs:
+                last = segs[-1]
+                style = last.style
+                if last.control or (style is not None and style.bgcolor is not None):
+                    break
+                stripped = last.text.rstrip()
+                if stripped == last.text:
+                    break
+                if stripped:
+                    segs[-1] = Segment(stripped, style, last.control)
+                    break
+                segs.pop()
+            yield from segs
+            yield Segment.line()
 
 
 def _build_text_transcript_lines(content: str, *, width: int) -> list[str]:
@@ -3166,9 +3199,11 @@ class Renderer:
                 content = str(getattr(msg, "content", "") or "").strip()
                 if content:
                     self.console.print(
-                        Padding(
-                            Markdown(normalize_agent_markdown(content), code_theme="ansi_dark"),
-                            (0, 0, 0, 2),
+                        _StripTrailingWhitespace(
+                            Padding(
+                                Markdown(normalize_agent_markdown(content), code_theme="ansi_dark"),
+                                (0, 0, 0, 2),
+                            )
                         )
                     )
                     self.console.print()
@@ -3797,7 +3832,7 @@ class Renderer:
             if text_accumulator:
                 turn_items.append({"kind": "text", "content": text_accumulator})
                 _advance_ctrl_o_tail(_text_render_line_count(text_accumulator))
-                self.console.print(_build_display(text_accumulator))
+                self.console.print(_StripTrailingWhitespace(_build_display(text_accumulator)))
                 text_accumulator = ""
 
         def _tool_task_for_event(event: Any) -> Any | None:
