@@ -55,7 +55,7 @@ class PaletteTests(unittest.TestCase):
         theme.set_theme("paprika")  # restore the default for other tests
 
     def test_three_named_palettes(self):
-        self.assertEqual(set(theme._PALETTES), {"paprika", "ocean", "vivid", "reef", "light"})
+        self.assertEqual(set(theme._PALETTES), {"paprika", "ocean", "vivid", "reef", "neon", "light"})
 
     def test_all_palettes_share_keys(self):
         keysets = [frozenset(p) for p in theme._PALETTES.values()]
@@ -88,7 +88,7 @@ class PaletteTests(unittest.TestCase):
 
     def test_dark_palettes_keep_all_signals_at_aa(self):
         # regression guard: the dark palettes hit full 4.5 AA on every signal.
-        for name in ("paprika", "ocean", "vivid", "reef"):
+        for name in ("paprika", "ocean", "vivid", "reef", "neon"):
             palette = theme._PALETTES[name]
             for role in ("accent", "success", "warning"):
                 self.assertGreaterEqual(
@@ -113,7 +113,7 @@ class ThemeHelperTests(unittest.TestCase):
         theme.set_theme("paprika")
 
     def test_available_themes_lists_all_palettes(self):
-        self.assertEqual(set(theme.available_themes()), {"paprika", "ocean", "vivid", "reef", "light"})
+        self.assertEqual(set(theme.available_themes()), {"paprika", "ocean", "vivid", "reef", "neon", "light"})
 
     def test_is_known_theme(self):
         self.assertTrue(theme.is_known_theme("Ocean"))   # case-insensitive
@@ -212,7 +212,7 @@ class LightThemeTests(unittest.TestCase):
 
     def test_light_is_flagged_light_dark_palettes_are_not(self):
         self.assertTrue(theme.is_light_theme("light"))
-        for name in ("paprika", "ocean", "vivid", "reef"):
+        for name in ("paprika", "ocean", "vivid", "reef", "neon"):
             self.assertFalse(theme.is_light_theme(name), name)
 
     def test_light_ground_is_white_dark_ground_is_dark(self):
@@ -256,7 +256,7 @@ class ThemePickerLinesTests(unittest.TestCase):
 
     def test_lists_every_palette_and_marks_active(self):
         joined = "\n".join(self._lines(0, active="paprika"))
-        for name in ("paprika", "ocean", "vivid", "reef", "light"):
+        for name in ("paprika", "ocean", "vivid", "reef", "neon", "light"):
             self.assertIn(name, joined)
         self.assertIn("(current)", joined)
 
@@ -274,12 +274,17 @@ class ThemePickerLinesTests(unittest.TestCase):
     def test_light_preview_paints_a_white_ground(self):
         # the light palette preview must sit on an explicit white background so its
         # dark signals stay visible on a dark terminal (48;2;255;255;255 = bg white)
-        joined = "\n".join(self._lines(4))  # light
+        joined = "\n".join(self._lines(5))  # light
         self.assertIn("48;2;255;255;255", joined)
 
     def test_dark_preview_paints_the_dark_ground(self):
         joined = "\n".join(self._lines(0))  # paprika, dark ground #18181b
         self.assertIn("48;2;24;24;27", joined)
+
+    def test_neon_preview_uses_its_hot_pink_error(self):
+        # neon (index 4) error #ff206e -> ANSI 255;32;110 in the coloured preview
+        joined = "\n".join(self._lines(4))
+        self.assertIn("255;32;110", joined)
 
     def test_plain_text_without_colour(self):
         joined = "\n".join(self._lines(0, force_color=False))

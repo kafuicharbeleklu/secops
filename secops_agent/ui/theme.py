@@ -64,6 +64,14 @@ _PALETTES = {
         "error": "#f94144", "danger": "#f94144", "danger_bright": "#ff6b6b",
         "tool_border": "#3a5560",
     },
+    # Neon — bold synthwave (from the turquoise/yellow/pink set): cyan accent, a
+    # neon-green success, electric yellow warning and a hot-pink error/danger.
+    "neon": {
+        **_TEXT, "accent": "#41ead4", "accent_bright": "#87f5e8",
+        "success": "#50fa7b", "warning": "#fbff12",
+        "error": "#ff206e", "danger": "#ff206e", "danger_bright": "#ff5c94",
+        "tool_border": "#3a2f5c",
+    },
     # Light — for a light terminal: dark text, deeper signals. Warm/green signals
     # cannot reach 4.5 on white, so they sit at WCAG non-text 3:1 as bold glyphs;
     # accent (>=4.5) and error (>=4.0) stay text-grade, and body text is >= 7:1.
@@ -79,14 +87,13 @@ _DEFAULT_THEME = "paprika"
 # Ground each palette is tuned for (contrast reference + light/dark awareness).
 _PALETTE_GROUND = {
     "paprika": _DARK_GROUND, "ocean": _DARK_GROUND, "vivid": _DARK_GROUND,
-    "reef": _DARK_GROUND, "light": _LIGHT_GROUND,
+    "reef": _DARK_GROUND, "neon": _DARK_GROUND, "light": _LIGHT_GROUND,
 }
 
 
 def resolve_theme_name() -> str:
     """Resolve the active theme: SECOPS_THEME selects a named palette
-    (paprika | ocean | vivid | reef | light); anything else falls back to
-    the default."""
+    (see available_themes()); anything else falls back to the default."""
     pref = os.environ.get("SECOPS_THEME", "").strip().lower()
     return pref if pref in _PALETTES else _DEFAULT_THEME
 

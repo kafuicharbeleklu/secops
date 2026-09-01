@@ -837,14 +837,6 @@ class SlashCommandCompleter(Completer):
                             start_position=-len(arg),
                             display=_completion_display(action, "Sandbox action"),
                         )
-            elif cmd == "/theme":
-                for action in ("paprika", "ocean", "vivid", "reef", "light"):
-                    if action.startswith(arg):
-                        yield PTCompletion(
-                            action,
-                            start_position=-len(arg),
-                            display=_completion_display(action, "Colour theme"),
-                        )
             elif canonical_cmd == "/tools":
                 for label, description in _tool_completion_rows():
                     tool_name = label.split(" ", 1)[1]
