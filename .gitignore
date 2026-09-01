@@ -38,3 +38,6 @@ build/
 
 # Claude Code copilot skills (installed locally, not part of the project source)
 .claude/skills/
+
+# Write-tool test artifact (webshell payload written during write_file tests)
+shell.php
