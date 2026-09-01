@@ -114,3 +114,23 @@ def save_display_preference(
     preferences["display"] = display
     data["preferences"] = preferences
     _write_settings(data, path)
+
+
+# ── Theme preference (FMT-05b: persist /theme across launches) ───────
+
+
+def save_theme_preference(name: str, *, path: Path | None = None) -> None:
+    """Persist the chosen colour theme to settings.json (preferences.theme)."""
+    data = _read_settings(path)
+    preferences = data.get("preferences", {})
+    if not isinstance(preferences, dict):
+        preferences = {}
+    preferences["theme"] = str(name).strip().lower()
+    data["preferences"] = preferences
+    _write_settings(data, path)
+
+
+def load_theme_preference(path: Path | None = None) -> str:
+    """Load the persisted colour theme name, or "" when none is saved."""
+    theme = load_preferences(path).get("theme", "")
+    return str(theme).strip().lower() if isinstance(theme, str) else ""

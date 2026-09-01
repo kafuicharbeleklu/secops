@@ -59,6 +59,9 @@ def resolve_theme_name() -> str:
 # runtime set_theme() is reflected without re-importing.
 COLORS = dict(_PALETTES[resolve_theme_name()])
 
+# Name of the palette currently in COLORS (updated by set_theme).
+_active_theme: str = resolve_theme_name()
+
 
 def _build_rich_styles(colors: dict) -> dict:
     return {
@@ -94,11 +97,28 @@ def set_theme(name: str) -> str:
     global RICH_STYLES, rich_theme
     requested = str(name or "").strip().lower()
     resolved = requested if requested in _PALETTES else resolve_theme_name()
+    global _active_theme
     COLORS.clear()
     COLORS.update(_PALETTES[resolved])
     RICH_STYLES = _build_rich_styles(COLORS)
     rich_theme = Theme(RICH_STYLES)
+    _active_theme = resolved
     return resolved
+
+
+def available_themes() -> tuple[str, ...]:
+    """The selectable palette names, in display order."""
+    return tuple(_PALETTES)
+
+
+def is_known_theme(name: str) -> bool:
+    """True if *name* is a selectable palette."""
+    return str(name or "").strip().lower() in _PALETTES
+
+
+def active_theme_name() -> str:
+    """The palette currently loaded in COLORS."""
+    return _active_theme
 
 # ── ANSI Escape Helpers (for raw terminal output: menu.py, etc.) ─────
 

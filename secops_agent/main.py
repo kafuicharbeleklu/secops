@@ -63,7 +63,12 @@ from secops_agent.core.mission import MissionContext
 from secops_agent.core.permissions import ApprovalDecision, PermissionDecision, PermissionResource
 from secops_agent.core.request_context import parse_environment_signal, set_operator_environment
 from secops_agent.core.planner import MissionPlanner
-from secops_agent.core.preferences import load_model_preference, save_model_preference
+from secops_agent.core.preferences import (
+    load_model_preference,
+    load_theme_preference,
+    save_model_preference,
+    save_theme_preference,
+)
 from secops_agent.core.result_parser import ToolResultParser
 from secops_agent.core.reporting import generate_pentest_report
 from secops_agent.core.sandbox import set_sandbox_enabled
@@ -639,6 +644,29 @@ def _startup_model_selection(cli_model: str | None) -> tuple[str | None, str | N
     raw_model = str(preference.get("raw_model") or "").strip()
     thinking = str(preference.get("thinking_level") or "").strip()
     return raw_model or None, thinking or None
+
+
+def _apply_startup_theme(renderer: "Renderer", input_handler: "InputHandler") -> None:
+    """Apply the persisted /theme choice at launch (FMT-05b).
+
+    An explicit ``SECOPS_THEME`` env var is an override and is already reflected
+    in COLORS at import time, so it wins over the saved preference. Otherwise a
+    previously saved palette is applied through the same path as the runtime
+    /theme command so the Console and prompt styling both pick it up.
+    """
+    if os.environ.get("SECOPS_THEME", "").strip():
+        return
+    from secops_agent.ui import theme as _theme_mod
+
+    saved = load_theme_preference()
+    if not saved or not _theme_mod.is_known_theme(saved):
+        return
+    _theme_mod.set_theme(saved)
+    try:
+        renderer.console.push_theme(_theme_mod.rich_theme)
+    except Exception:
+        pass
+    input_handler.refresh_theme()
 
 
 def _has_autosave_activity(agent: SecOpsAgent, runtime: RuntimeState) -> bool:
@@ -1419,15 +1447,28 @@ async def run_chat_loop(
                             renderer.render_success(f"{message}: standard reasoning profile restored.")
                     elif canonical_cmd == "/theme":
                         from secops_agent.ui import theme as _theme_mod
-                        resolved = _theme_mod.set_theme(arg.strip().lower() or "auto")
-                        try:
-                            renderer.console.push_theme(_theme_mod.rich_theme)
-                        except Exception:
-                            pass
-                        input_handler.refresh_theme()
-                        renderer.render_success(
-                            f"Theme set to {resolved}. Set SECOPS_THEME to persist across restarts."
-                        )
+                        requested = arg.strip().lower()
+                        options = " | ".join(_theme_mod.available_themes())
+                        if not requested:
+                            renderer.render_status(
+                                f"Theme: {_theme_mod.active_theme_name()}. "
+                                f"Available: {options}. Usage: /theme <name>."
+                            )
+                        elif not _theme_mod.is_known_theme(requested):
+                            renderer.render_warning(
+                                f"Unknown theme '{requested}'. Available: {options}."
+                            )
+                        else:
+                            resolved = _theme_mod.set_theme(requested)
+                            try:
+                                renderer.console.push_theme(_theme_mod.rich_theme)
+                            except Exception:
+                                pass
+                            input_handler.refresh_theme()
+                            save_theme_preference(resolved)
+                            renderer.render_success(
+                                f"Theme set to {resolved} and saved for the next launch."
+                            )
                     elif canonical_cmd == "/config":
                         selection = renderer.render_config(
                             model=agent.llm.model_name,
@@ -1963,6 +2004,7 @@ def main(
 
     renderer = Renderer()
     input_handler = InputHandler()
+    _apply_startup_theme(renderer, input_handler)
 
     def _sigint(sig, frame):
         pass  # Let the loop handle it
