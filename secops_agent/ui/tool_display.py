@@ -471,12 +471,38 @@ _RISK_LABELS = {
 }
 
 
+_SHELL_NETWORK_TOOLS = frozenset({
+    "curl", "wget", "ping", "dig", "nslookup", "host", "whois", "traceroute",
+})
+_SHELL_LOCAL_READ = frozenset({
+    "ls", "cat", "head", "tail", "grep", "find", "id", "whoami", "pwd", "date",
+    "uname", "which", "file", "wc", "stat", "env", "echo",
+})
+
+
+def _shell_command_risk_label(command: str) -> str | None:
+    """Command-aware risk for a run_shell approval, or None to keep the tool's
+    static (conservative) risk. Only downgrades for an unambiguous single-
+    executable read command; anything privileged/destructive/compound/unknown
+    keeps the conservative label so risk is never understated. Display only -
+    the PermissionEngine still gates the tool and the command (#2a)."""
+    cmd = str(command or "").strip()
+    if not cmd or any(op in cmd for op in ("&&", "||", ";", "|", "`", "$(", ">", "<")):
+        return None
+    word = _first_command_word(cmd)
+    if word in _SHELL_NETWORK_TOOLS:
+        return _RISK_LABELS[ToolRiskClass.NETWORK_OBSERVATION]
+    if word in _SHELL_LOCAL_READ:
+        return _RISK_LABELS[ToolRiskClass.LOCAL_OBSERVATION]
+    return None
+
+
 def _approval_context_line(
     tool_name: str,
     arguments: Dict[str, Any],
     resource: PermissionResource,
 ) -> str:
-    risk_label = _approval_risk_label(tool_name, resource)
+    risk_label = _approval_risk_label(tool_name, resource, arguments)
     feasibility = _approval_feasibility_label(arguments, resource)
     parts = [f"Resource: {resource.value}", f"Risk: {risk_label}"]
     if feasibility:
@@ -484,8 +510,16 @@ def _approval_context_line(
     return " · ".join(parts)
 
 
-def _approval_risk_label(tool_name: str, resource: PermissionResource) -> str:
+def _approval_risk_label(
+    tool_name: str,
+    resource: PermissionResource,
+    arguments: Dict[str, Any] | None = None,
+) -> str:
     if resource.kind == "tool":
+        if resource.name == "run_shell" or tool_name == "run_shell":
+            command_label = _shell_command_risk_label(_editable_command(arguments or {}))
+            if command_label:
+                return command_label
         tool_def = tool_registry.get_tool(resource.name) or tool_registry.get_tool(tool_name)
         risk_class = getattr(tool_def, "risk_class", None)
         if isinstance(risk_class, ToolRiskClass):
