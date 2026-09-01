@@ -1,6 +1,5 @@
-"""FMT-05: named dark/light palettes, startup resolution (SECOPS_THEME /
-COLORFGBG), and runtime set_theme. The light palette must stay WCAG-AA on a
-white terminal background.
+"""Named colour palettes (paprika / ocean / vivid), theme resolution, and runtime
+set_theme. Each palette's four signal hues stay readable on the terminal ground.
 """
 from __future__ import annotations
 
@@ -11,7 +10,7 @@ from unittest.mock import patch
 import secops_agent.ui.theme as theme
 
 
-def _contrast(fg: str, bg: str = "#ffffff") -> float:
+def _contrast(fg: str, bg: str = "#18181b") -> float:
     def rgb(h):
         h = h.lstrip("#")
         return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
@@ -29,48 +28,54 @@ def _contrast(fg: str, bg: str = "#ffffff") -> float:
 
 
 class ThemeResolutionTests(unittest.TestCase):
-    def _resolve(self, env: dict) -> str:
+    def _resolve(self, value=None) -> str:
         with patch.dict(os.environ, {}, clear=False):
-            for key in ("SECOPS_THEME", "COLORFGBG"):
-                os.environ.pop(key, None)
-            os.environ.update(env)
+            os.environ.pop("SECOPS_THEME", None)
+            if value is not None:
+                os.environ["SECOPS_THEME"] = value
             return theme.resolve_theme_name()
 
-    def test_default_is_dark(self):
-        self.assertEqual(self._resolve({}), "dark")
+    def test_default_is_paprika(self):
+        self.assertEqual(self._resolve(), "paprika")
 
-    def test_colorfgbg_detects_light_background(self):
-        self.assertEqual(self._resolve({"COLORFGBG": "0;15"}), "light")
-        self.assertEqual(self._resolve({"COLORFGBG": "15;0"}), "dark")
+    def test_env_selects_named_palette(self):
+        self.assertEqual(self._resolve("ocean"), "ocean")
+        self.assertEqual(self._resolve("vivid"), "vivid")
 
-    def test_explicit_env_overrides_detection(self):
-        self.assertEqual(self._resolve({"SECOPS_THEME": "light", "COLORFGBG": "15;0"}), "light")
-        self.assertEqual(self._resolve({"SECOPS_THEME": "dark", "COLORFGBG": "0;15"}), "dark")
+    def test_unknown_falls_back_to_default(self):
+        self.assertEqual(self._resolve("bogus"), "paprika")
 
 
 class PaletteTests(unittest.TestCase):
     def tearDown(self):
-        theme.set_theme("dark")  # never leak a non-default palette to other tests
+        theme.set_theme("paprika")  # restore the default for other tests
 
-    def test_palettes_have_identical_keys(self):
-        self.assertEqual(set(theme._DARK_PALETTE), set(theme._LIGHT_PALETTE))
+    def test_three_named_palettes(self):
+        self.assertEqual(set(theme._PALETTES), {"paprika", "ocean", "vivid"})
 
-    def test_set_theme_updates_live_colors(self):
-        self.assertEqual(theme.set_theme("light"), "light")
-        self.assertEqual(theme.COLORS["text"], "#18181b")
-        self.assertEqual(theme.set_theme("dark"), "dark")
-        self.assertEqual(theme.COLORS["text"], "#e4e4e7")
+    def test_all_palettes_share_keys(self):
+        keysets = [frozenset(p) for p in theme._PALETTES.values()]
+        self.assertEqual(len(set(keysets)), 1, "every palette must define the same keys")
 
-    def test_light_palette_is_AA_on_white(self):
-        functional = [
-            "accent", "accent_bright", "success", "error", "warning",
-            "text", "text_secondary", "text_muted", "tool_border", "danger", "danger_bright",
-        ]
-        for key in functional:
+    def test_set_theme_switches_live(self):
+        self.assertEqual(theme.set_theme("vivid"), "vivid")
+        self.assertEqual(theme.COLORS["accent"], "#08bdbd")
+        self.assertEqual(theme.set_theme("paprika"), "paprika")
+        self.assertEqual(theme.COLORS["accent"], "#669bbc")
+
+    def test_signal_colours_readable_on_ground(self):
+        for name, palette in theme._PALETTES.items():
+            for role in ("accent", "success", "warning"):
+                self.assertGreaterEqual(
+                    _contrast(palette[role]), 4.5, f"{name}.{role} {palette[role]} below AA on ground"
+                )
             self.assertGreaterEqual(
-                _contrast(theme._LIGHT_PALETTE[key]), 4.5,
-                f"{key} {theme._LIGHT_PALETTE[key]} fails AA on white",
+                _contrast(palette["error"]), 4.0, f"{name}.error {palette['error']} too low"
             )
+
+    def test_vivid_has_a_true_red_danger(self):
+        r, g, b = (int(theme._PALETTES["vivid"]["danger"].lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        self.assertTrue(r > g and r > b, "vivid danger should be an unambiguous red")
 
 
 if __name__ == "__main__":

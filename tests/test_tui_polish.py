@@ -558,7 +558,7 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn(f"SecOps CLI {__version__}", banner)
         self.assertIn("Pentest agent", banner)
         self.assertNotIn("@", banner)
-        self.assertEqual(COLORS["accent"], "#FFCD11")
+        self.assertRegex(COLORS["accent"], r"^#[0-9a-fA-F]{6}$")  # a valid theme accent (palette-agnostic)
 
     def test_startup_does_not_emit_clear_screen_spacing(self):
         self.assertEqual(STARTUP_CLEAR_SEQUENCE, "")

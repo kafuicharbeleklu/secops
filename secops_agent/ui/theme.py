@@ -14,38 +14,45 @@ from secops_agent.core.model_catalog import model_display_name
 from rich.theme import Theme
 
 # ── Palettes ─────────────────────────────────────────────────────────
-# Rule: Color is a signal, not decoration. Two named palettes; the light one
-# keeps every functional colour at WCAG-AA on a white background (FMT-05).
+# Rule: Color is a signal, not decoration. Three named palettes on the terminal
+# ground; the text greys are shared, only the four signal hues change. Select
+# with SECOPS_THEME or the /theme command (paprika | ocean | vivid).
 
-_DARK_PALETTE = {
-    "accent": "#FFCD11", "accent_bright": "#FFE27A",
-    "success": "#86efac", "error": "#fca5a5", "warning": "#fde68a",
+_TEXT = {
     "text": "#e4e4e7", "text_secondary": "#a1a1aa", "text_muted": "#82828b",
-    "text_dim": "#3f3f46", "tool_border": "#6a6a73", "tool_name": "#e4e4e7",
-    "danger": "#fca5a5", "danger_bright": "#f87171",
+    "text_dim": "#3f3f46", "tool_name": "#e4e4e7",
 }
-_LIGHT_PALETTE = {
-    "accent": "#a16207", "accent_bright": "#b45309",
-    "success": "#15803d", "error": "#b91c1c", "warning": "#b45309",
-    "text": "#18181b", "text_secondary": "#3f3f46", "text_muted": "#52525b",
-    "text_dim": "#a1a1aa", "tool_border": "#71717a", "tool_name": "#18181b",
-    "danger": "#b91c1c", "danger_bright": "#991b1b",
+_PALETTES = {
+    # Spicy Paprika — warm, grounded: steel accent, olive/orange/paprika signals.
+    "paprika": {
+        **_TEXT, "accent": "#669bbc", "accent_bright": "#8fbdd8",
+        "success": "#a8c686", "warning": "#f3a712",
+        "error": "#e4572e", "danger": "#e4572e", "danger_bright": "#ff6f42",
+        "tool_border": "#3b4668",
+    },
+    # Ocean — cool, calm: sky accent, teal/yellow/pumpkin signals.
+    "ocean": {
+        **_TEXT, "accent": "#3da5d9", "accent_bright": "#6fc0e8",
+        "success": "#73bfb8", "warning": "#fec601",
+        "error": "#ea7317", "danger": "#ea7317", "danger_bright": "#ff9440",
+        "tool_border": "#2364aa",
+    },
+    # Vivid — bold: teal accent, fern/saffron and an unambiguous red for danger.
+    "vivid": {
+        **_TEXT, "accent": "#08bdbd", "accent_bright": "#43d6d6",
+        "success": "#29bf12", "warning": "#ff9914",
+        "error": "#f21b3f", "danger": "#f21b3f", "danger_bright": "#ff4864",
+        "tool_border": "#2a6b6b",
+    },
 }
-_PALETTES = {"dark": _DARK_PALETTE, "light": _LIGHT_PALETTE}
-_LIGHT_BG_CODES = {"7", "9", "10", "11", "12", "13", "14", "15"}
+_DEFAULT_THEME = "paprika"
 
 
 def resolve_theme_name() -> str:
-    """Resolve the active theme (FMT-05): SECOPS_THEME=dark|light|auto (default
-    auto). ``auto`` detects a light terminal from COLORFGBG (the widely-set
-    'fg;bg' hint, bg last) and falls back to dark."""
-    pref = os.environ.get("SECOPS_THEME", "auto").strip().lower()
-    if pref in _PALETTES:
-        return pref
-    fgbg = os.environ.get("COLORFGBG", "").strip()
-    if fgbg and fgbg.split(";")[-1].strip() in _LIGHT_BG_CODES:
-        return "light"
-    return "dark"
+    """Resolve the active theme: SECOPS_THEME selects a named palette
+    (paprika | ocean | vivid); anything else falls back to the default."""
+    pref = os.environ.get("SECOPS_THEME", "").strip().lower()
+    return pref if pref in _PALETTES else _DEFAULT_THEME
 
 
 # COLORS is a *live* dict: ansi()/pt_style_dict() read it at call time, so a

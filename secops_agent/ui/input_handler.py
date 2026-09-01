@@ -827,7 +827,7 @@ class SlashCommandCompleter(Completer):
                             display=_completion_display(action, "Sandbox action"),
                         )
             elif cmd == "/theme":
-                for action in ("dark", "light", "auto"):
+                for action in ("paprika", "ocean", "vivid"):
                     if action.startswith(arg):
                         yield PTCompletion(
                             action,
