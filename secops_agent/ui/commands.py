@@ -58,6 +58,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("/statusline", "Show status line fields and state payload", "Configuration"),
     CommandSpec("/task", "Show background task details", "Tasks", usage="/task <id> [logs]"),
     CommandSpec("/tasks", "Show the task-filtered orchestration view", "Tasks"),
+    CommandSpec("/theme", "Switch the colour theme (dark/light/auto)", "Configuration", usage="/theme [dark|light|auto]"),
     CommandSpec("/trajectory", "Open the full conversation and tool timeline", "Session"),
     CommandSpec("/tools", "List registered SecOps tools; add a name for details", "Tools", alias="/tool", usage="/tools [name]"),
 )

@@ -131,6 +131,7 @@ Runtime and UX:
 /fast
 /permissions [allow|ask|deny|clear] <resource>
 /sandbox [on|off|status]
+/theme [dark|light|auto]
 /keybindings
 /auto [on|off]
 ```

@@ -826,6 +826,14 @@ class SlashCommandCompleter(Completer):
                             start_position=-len(arg),
                             display=_completion_display(action, "Sandbox action"),
                         )
+            elif cmd == "/theme":
+                for action in ("dark", "light", "auto"):
+                    if action.startswith(arg):
+                        yield PTCompletion(
+                            action,
+                            start_position=-len(arg),
+                            display=_completion_display(action, "Colour theme"),
+                        )
             elif canonical_cmd == "/tools":
                 for label, description in _tool_completion_rows():
                     tool_name = label.split(" ", 1)[1]
@@ -1258,6 +1266,12 @@ class InputHandler:
             else:
                 console.print(f"[{COLORS['text_muted']}]{escape(line)}[/{COLORS['text_muted']}]")
         console.print()
+
+    def refresh_theme(self) -> None:
+        """Rebuild the prompt styling from the current theme palette (FMT-05)."""
+        self.style = PtStyle.from_dict(pt_style_dict())
+        with contextlib.suppress(Exception):
+            self.session.style = self.style
 
     async def get_input(self, model_name: str = "") -> Optional[str]:
         if model_name:

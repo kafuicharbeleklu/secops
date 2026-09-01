@@ -13,56 +13,85 @@ from secops_agent import __version__
 from secops_agent.core.model_catalog import model_display_name
 from rich.theme import Theme
 
-# ── Color Palette — Professional and restrained ──────────────────────
-# Rule: Color is a signal, not decoration.
-# Use white/gray for content, color only for state indicators.
+# ── Palettes ─────────────────────────────────────────────────────────
+# Rule: Color is a signal, not decoration. Two named palettes; the light one
+# keeps every functional colour at WCAG-AA on a white background (FMT-05).
 
-COLORS = {
-    # Primary SecOps gold (used sparingly — logo, prompt, active states)
-    "accent": "#FFCD11",
-    "accent_bright": "#FFE27A",
-    # Functional — deliberately desaturated for professional feel
-    "success": "#86efac",       # Soft green (was #4ade80 — too vivid)
-    "error": "#fca5a5",         # Soft red (was #f87171 — too vivid)
-    "warning": "#fde68a",       # Soft amber (was #fbbf24 — too vivid)
-    # Text hierarchy (unchanged — already good)
-    "text": "#e4e4e7",
-    "text_secondary": "#a1a1aa",
-    "text_muted": "#82828b",
-    "text_dim": "#3f3f46",
-    # Tool styling — gray, not blue (color austerity)
-    "tool_border": "#6a6a73",
-    "tool_name": "#e4e4e7",     # White — not blue
-    # Permission / danger
-    "danger": "#fca5a5",
-    "danger_bright": "#f87171",
+_DARK_PALETTE = {
+    "accent": "#FFCD11", "accent_bright": "#FFE27A",
+    "success": "#86efac", "error": "#fca5a5", "warning": "#fde68a",
+    "text": "#e4e4e7", "text_secondary": "#a1a1aa", "text_muted": "#82828b",
+    "text_dim": "#3f3f46", "tool_border": "#6a6a73", "tool_name": "#e4e4e7",
+    "danger": "#fca5a5", "danger_bright": "#f87171",
 }
-
-# ── Rich Theme ────────────────────────────────────────────────────────
-
-RICH_STYLES = {
-    "agent_name": f"bold {COLORS['accent']}",
-    "user_prompt": f"bold {COLORS['text']}",
-    "thinking": f"italic {COLORS['text_muted']}",
-    "tool_call": f"bold {COLORS['tool_border']}",
-    "tool_result": f"bold {COLORS['success']}",
-    "error": f"bold {COLORS['error']}",
-    "success": f"bold {COLORS['success']}",
-    "info": f"bold {COLORS['accent']}",
-    "muted": COLORS["text_muted"],
-    "dim": COLORS["text_dim"],
-    "warning": f"bold {COLORS['warning']}",
-    "markdown.code": f"bold {COLORS['accent_bright']}",
-    "markdown.code_block": COLORS["text"],
-    "markdown.strong": f"bold {COLORS['accent_bright']}",
-    # Section headers in agent answers: left-aligned (Rich default for h2+),
-    # accented so structure reads as titles, not flat bold.
-    "markdown.h1": f"bold {COLORS['accent_bright']}",
-    "markdown.h2": f"bold {COLORS['accent']}",
-    "markdown.h3": f"bold {COLORS['accent']}",
+_LIGHT_PALETTE = {
+    "accent": "#a16207", "accent_bright": "#b45309",
+    "success": "#15803d", "error": "#b91c1c", "warning": "#b45309",
+    "text": "#18181b", "text_secondary": "#3f3f46", "text_muted": "#52525b",
+    "text_dim": "#a1a1aa", "tool_border": "#71717a", "tool_name": "#18181b",
+    "danger": "#b91c1c", "danger_bright": "#991b1b",
 }
+_PALETTES = {"dark": _DARK_PALETTE, "light": _LIGHT_PALETTE}
+_LIGHT_BG_CODES = {"7", "9", "10", "11", "12", "13", "14", "15"}
 
+
+def resolve_theme_name() -> str:
+    """Resolve the active theme (FMT-05): SECOPS_THEME=dark|light|auto (default
+    auto). ``auto`` detects a light terminal from COLORFGBG (the widely-set
+    'fg;bg' hint, bg last) and falls back to dark."""
+    pref = os.environ.get("SECOPS_THEME", "auto").strip().lower()
+    if pref in _PALETTES:
+        return pref
+    fgbg = os.environ.get("COLORFGBG", "").strip()
+    if fgbg and fgbg.split(";")[-1].strip() in _LIGHT_BG_CODES:
+        return "light"
+    return "dark"
+
+
+# COLORS is a *live* dict: ansi()/pt_style_dict() read it at call time, so a
+# runtime set_theme() is reflected without re-importing.
+COLORS = dict(_PALETTES[resolve_theme_name()])
+
+
+def _build_rich_styles(colors: dict) -> dict:
+    return {
+        "agent_name": f"bold {colors['accent']}",
+        "user_prompt": f"bold {colors['text']}",
+        "thinking": f"italic {colors['text_muted']}",
+        "tool_call": f"bold {colors['tool_border']}",
+        "tool_result": f"bold {colors['success']}",
+        "error": f"bold {colors['error']}",
+        "success": f"bold {colors['success']}",
+        "info": f"bold {colors['accent']}",
+        "muted": colors["text_muted"],
+        "dim": colors["text_dim"],
+        "warning": f"bold {colors['warning']}",
+        "markdown.code": f"bold {colors['accent_bright']}",
+        "markdown.code_block": colors["text"],
+        "markdown.strong": f"bold {colors['accent_bright']}",
+        "markdown.h1": f"bold {colors['accent_bright']}",
+        "markdown.h2": f"bold {colors['accent']}",
+        "markdown.h3": f"bold {colors['accent']}",
+    }
+
+
+RICH_STYLES = _build_rich_styles(COLORS)
 rich_theme = Theme(RICH_STYLES)
+
+
+def set_theme(name: str) -> str:
+    """Switch the active palette at runtime (FMT-05). Updates COLORS in place so
+    ansi()/pt_style_dict() reflect it immediately, and rebuilds RICH_STYLES /
+    rich_theme. Returns the resolved theme name; a caller holding a Console must
+    push the new rich_theme for its rich output to update live."""
+    global RICH_STYLES, rich_theme
+    requested = str(name or "").strip().lower()
+    resolved = requested if requested in _PALETTES else resolve_theme_name()
+    COLORS.clear()
+    COLORS.update(_PALETTES[resolved])
+    RICH_STYLES = _build_rich_styles(COLORS)
+    rich_theme = Theme(RICH_STYLES)
+    return resolved
 
 # ── ANSI Escape Helpers (for raw terminal output: menu.py, etc.) ─────
 

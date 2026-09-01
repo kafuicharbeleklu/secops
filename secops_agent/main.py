@@ -1417,6 +1417,17 @@ async def run_chat_loop(
                             renderer.render_success(f"{message}: shorter loops, lower temperature.")
                         else:
                             renderer.render_success(f"{message}: standard reasoning profile restored.")
+                    elif canonical_cmd == "/theme":
+                        from secops_agent.ui import theme as _theme_mod
+                        resolved = _theme_mod.set_theme(arg.strip().lower() or "auto")
+                        try:
+                            renderer.console.push_theme(_theme_mod.rich_theme)
+                        except Exception:
+                            pass
+                        input_handler.refresh_theme()
+                        renderer.render_success(
+                            f"Theme set to {resolved}. Set SECOPS_THEME to persist across restarts."
+                        )
                     elif canonical_cmd == "/config":
                         selection = renderer.render_config(
                             model=agent.llm.model_name,
