@@ -1550,9 +1550,17 @@ class SecOpsAgent:
             normalized.pop("extra_args", None)
         return normalized
 
-    @staticmethod
-    def _canonical_tool_name(tool_name: str) -> str:
-        normalized = re.sub(r"[^a-z0-9]+", "_", str(tool_name or "").casefold()).strip("_")
+    def _canonical_tool_name(self, tool_name: str) -> str:
+        original = str(tool_name or "").strip()
+        normalized = re.sub(r"[^a-z0-9]+", "_", original.casefold()).strip("_")
+        # Never alias a name that is itself a registered tool: http_request is a
+        # real tool (multipart upload). Only fall back to the run_shell/curl alias
+        # when the real tool is unavailable, so an http_request call stops being
+        # hijacked into a plain `curl <url>` GET (dropped upload -> the RootMe loop).
+        if self.registry.get_tool(original):
+            return original
+        if self.registry.get_tool(normalized):
+            return normalized
         aliases = {
             "bash": "run_shell",
             "execute_bash": "run_shell",
@@ -1574,7 +1582,7 @@ class SecOpsAgent:
             "dir_brute_force": "dir_brute",
             "vpnstatus": "vpn_status",
         }
-        return aliases.get(normalized, str(tool_name or "").strip())
+        return aliases.get(normalized, original)
 
     @staticmethod
     def _first_string_argument(arguments: dict[str, Any]) -> str:
