@@ -2424,6 +2424,16 @@ class SecOpsAgent:
                         else:
                             permission = self.permissions.evaluate_tool(tc.name, tool_def.dangerous)
                             resource = self.permissions.tool_resource(tc.name)
+                            # #2b: the generic tool(run_shell) prompt is redundant with
+                            # the command-gate below, which DENYs destructive commands
+                            # (rm, dd, compound-with-rm) and ASKs everything else. When
+                            # the tool gate only ASKs, skip its prompt so the specific
+                            # command approval is the single prompt for a shell command.
+                            # A mode-level DENY (plan mode) is still respected here, and
+                            # ALLOW (always-proceed / a remembered rule) already prompts
+                            # nothing -- so no gate is weakened.
+                            if tc.name == "run_shell" and permission == PermissionDecision.ASK:
+                                permission = PermissionDecision.ALLOW
                     if action_trace is not None:
                         action_trace.permission = permission.value
 
