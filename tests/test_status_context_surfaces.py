@@ -40,8 +40,9 @@ class RiskBadgeColourTests(unittest.TestCase):
             self.assertIn(COLORS["warning"], self._markup_for(token))
 
     def test_passive_tiers_stay_muted(self):
-        self.assertIn(COLORS["text_dim"], self._markup_for("R0"))
-        self.assertIn(COLORS["text_dim"], self._markup_for("R1"))
+        # R0-R2 (passive band) share the quiet muted grey - legible, not near-invisible
+        self.assertIn(COLORS["text_muted"], self._markup_for("R0"))
+        self.assertIn(COLORS["text_muted"], self._markup_for("R1"))
         self.assertIn(COLORS["text_muted"], self._markup_for("R2"))
 
     def test_unknown_tier_falls_back_to_muted(self):

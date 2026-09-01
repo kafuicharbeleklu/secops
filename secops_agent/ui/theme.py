@@ -28,10 +28,10 @@ COLORS = {
     # Text hierarchy (unchanged — already good)
     "text": "#e4e4e7",
     "text_secondary": "#a1a1aa",
-    "text_muted": "#71717a",
+    "text_muted": "#82828b",
     "text_dim": "#3f3f46",
     # Tool styling — gray, not blue (color austerity)
-    "tool_border": "#52525b",
+    "tool_border": "#6a6a73",
     "tool_name": "#e4e4e7",     # White — not blue
     # Permission / danger
     "danger": "#fca5a5",

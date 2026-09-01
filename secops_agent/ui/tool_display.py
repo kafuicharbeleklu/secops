@@ -97,7 +97,16 @@ def _is_noise_line(line: str) -> bool:
         return True
     if "TOOL DATA" in stripped.upper():
         return True
-    return all(ch in _DECORATION_CHARS for ch in stripped)
+    if all(ch in _DECORATION_CHARS for ch in stripped):
+        return True
+    # Section rule around a short label, e.g. "── Network ──".
+    core = stripped.strip("─-=_~ ").strip()
+    if core != stripped and len(core) <= 16:
+        return True
+    # Emoji/symbol banner with no value, e.g. "🖥️ System Information".
+    if ":" not in stripped and not stripped[:1].isascii():
+        return True
+    return False
 
 
 def summarize_output(text: str, max_lines: int = 6, max_width: int = 110) -> Dict[str, Any]:
@@ -219,8 +228,8 @@ def _tool_risk_badge(tool_name: str) -> str:
 # (R0-R2). The ramp stays inside the theme's "colour austerity": quiet grey for
 # passive tiers, amber for active/privileged, red for offensive/remote.
 _RISK_BADGE_COLOR_KEY = {
-    0: "text_dim",
-    1: "text_dim",
+    0: "text_muted",
+    1: "text_muted",
     2: "text_muted",
     3: "warning",
     4: "warning",

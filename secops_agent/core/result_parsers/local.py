@@ -139,10 +139,24 @@ def parse_file_analyze_output(raw: str, args: Dict[str, Any]) -> ParsedResult:
 
 def parse_sysinfo_output(raw: str, args: Dict[str, Any]) -> ParsedResult:
     clean = _clean_text(raw)
-    fields = {key.casefold(): value.strip() for key, value in re.findall(r"^\s*([A-Za-z][A-Za-z /()-]+):\s*(.+)$", clean, re.M)}
+    pairs = re.findall(r"^\s*([A-Za-z][A-Za-z /()-]+):\s*(.+)$", clean, re.M)
+    fields = {key.casefold(): value.strip() for key, value in pairs}
     hostname = fields.get("hostname", "")
+    # Lead with a concise, meaningful fact rather than falsely claiming no facts
+    # were found: prefer stable keys (hostname, gateway, OS...) over a noisy dump.
+    _preferred = ("hostname", "default gateway", "os", "kernel", "dns")
+    _lead = next(((k, fields[k]) for k in _preferred if fields.get(k)), None)
+    if _lead:
+        _label = {"os": "OS", "dns": "DNS"}.get(_lead[0], _lead[0].title())
+        summary = f"{_label}: {_lead[1]}"
+    elif pairs:
+        key, value = pairs[0]
+        summary = f"{key.strip()}: {value.strip()}"
+    else:
+        content = [line.strip() for line in clean.splitlines() if line.strip()]
+        summary = f"System info: {len(content)} line(s)" if content else "sysinfo: no output"
     return _result(
-        "sysinfo", raw, f"Hostname: {hostname}" if hostname else "sysinfo: (no system facts found)",
+        "sysinfo", raw, summary,
         data={"hostname": hostname, "os": fields.get("os", ""), "kernel": fields.get("kernel", ""),
               "default_gateway": fields.get("default gateway", "")},
     )
