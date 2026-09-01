@@ -697,7 +697,7 @@ def _render_expanded_tool_output(console: Any, artifact: Any) -> int:
             console.print(f"    [{COLORS['text_muted']}]{escape(_fit_text(line, max(1, width - 6)))}[/{COLORS['text_muted']}]")
         rendered_lines += len(visible_lines)
         if len(lines) > len(visible_lines):
-            console.print(f"    [{COLORS['text_dim']}]... {len(lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_dim']}]")
+            console.print(f"    [{COLORS['text_muted']}]... {len(lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_muted']}]")
             rendered_lines += 1
     return rendered_lines
 
@@ -869,6 +869,8 @@ class InputHandler:
     # Sentinel value returned when user types '?' alone
     SHORTCUT_REQUEST = "__SHORTCUT_REQUEST__"
     ARTIFACT_REVIEW_REQUEST = "__ARTIFACT_REVIEW_REQUEST__"
+    # Returned when Ctrl+C is confirmed on an empty prompt (quit the CLI).
+    QUIT_REQUEST = "__QUIT_REQUEST__"
 
     def __init__(self):
         # Use theme.py as the single source of truth for all styling
@@ -947,6 +949,39 @@ class InputHandler:
         @self.bindings.add("c-l")
         def _clear_screen(event):
             event.app.renderer.clear()
+
+        @self.bindings.add("c-c")
+        def _ctrl_c_quit(event):
+            """Claude-Code-style Ctrl+C: a typed line is cleared first; on an
+            empty prompt the first press arms an exit and prints a hint, and a
+            second press within the window quits gracefully. (During generation
+            Ctrl+C is handled separately as an interrupt.)"""
+            buffer = event.current_buffer
+            if buffer.text:
+                buffer.reset()
+                self._ctrl_c_armed = False
+                self._interrupt_hint = ""
+                _refresh_slash_completion_after_edit(buffer)
+                event.app.invalidate()
+                return
+            if self._ctrl_c_armed:
+                self._ctrl_c_armed = False
+                self._interrupt_hint = ""
+                event.app.exit(result=self.QUIT_REQUEST)
+                return
+            self._ctrl_c_armed = True
+            self._interrupt_hint = "Press Ctrl+C again to exit"
+            app = event.app
+            app.invalidate()
+
+            def _disarm() -> None:
+                self._ctrl_c_armed = False
+                self._interrupt_hint = ""
+                with contextlib.suppress(Exception):
+                    app.invalidate()
+
+            with contextlib.suppress(RuntimeError):
+                importlib.import_module("asyncio").get_running_loop().call_later(2.0, _disarm)
 
         @self.bindings.add("c-g")
         async def _open_prompt_editor(event):
@@ -1066,6 +1101,8 @@ class InputHandler:
         self._runtime = None
         self._console = None
         self._permission_mode_cycler = None
+        self._ctrl_c_armed = False
+        self._interrupt_hint = ""
         self._statusline = {
             "cwd": "",
             "tokens": 0,
@@ -1232,10 +1269,14 @@ class InputHandler:
             # hid permission mode, sandbox state and current phase behind the
             # /statusline overlay precisely while an operator needed them.
             statusline = self._build_statusline(width)
-            return [
+            fragments = [
                 ("class:prompt_border", _prompt_separator(width) + "\n"),
                 ("class:toolbar_left", statusline),
             ]
+            interrupt_hint = getattr(self, "_interrupt_hint", "")
+            if interrupt_hint:
+                fragments.append(("class:toolbar_hint", "\n" + _fit_text(interrupt_hint, width)))
+            return fragments
 
     def _prompt_fragments(self):
         width = _frame_width(_terminal_width())
@@ -1285,6 +1326,10 @@ class InputHandler:
                 self._prompt_fragments(),
                 bottom_toolbar=self._get_toolbar,
             )
+
+            # Ctrl+C confirmed on an empty prompt → propagate the quit sentinel.
+            if user_input == self.QUIT_REQUEST:
+                return self.QUIT_REQUEST
 
             # Intercept lone '?' to show shortcuts
             if user_input and user_input.strip() == "?":

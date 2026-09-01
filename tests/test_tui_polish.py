@@ -718,7 +718,9 @@ class TUIPolishTests(unittest.TestCase):
             self.assertIn("noinherit", styles[key])
             self.assertIn("noreverse", styles[key])
 
-    def test_model_overlay_lines_match_antigravity_picker_shape(self):
+    def test_model_overlay_lists_each_model_once(self):
+        # Redesign: one row per MODEL; reasoning variants are folded into the
+        # ←/→ toggle instead of being separate rows (no "(Off)"/"(High)" rows).
         choices = _model_choices(selectable_models(), DEFAULT_MODEL)
         lines = build_choice_overlay_lines(
             "Switch Model",
@@ -736,13 +738,15 @@ class TUIPolishTests(unittest.TestCase):
         self.assertRegex(rendered, r"> Gemini 2\.5 Flash\s{4,}\(current\)")
 
         labels = [c.label for c in choices]
-        self.assertIn("Gemma 4 26B A4B IT (Off)", labels)
-        self.assertIn("Gemma 4 26B A4B IT (High)", labels)
-        self.assertIn("Gemma 4 31B IT (Off)", labels)
-        self.assertIn("Gemma 4 31B IT (High)", labels)
+        values = [c.value for c in choices]
+        self.assertIn("Gemma 4 26B A4B IT", labels)
+        self.assertIn("Gemma 4 31B IT", labels)
+        # Reasoning-variant rows are gone; each model appears exactly once.
+        self.assertNotIn("Gemma 4 26B A4B IT (Off)", labels)
+        self.assertNotIn("Gemma 4 26B A4B IT (High)", labels)
+        self.assertNotIn("Gemma 4 31B IT (High)", labels)
+        self.assertEqual(len(values), len(set(values)))
 
-        self.assertNotIn("Gemini 2.5 Flash   (current)\n\n  Gemma 4 26B A4B IT", rendered)
-        self.assertNotIn("Gemma 4 26B A4B IT (Low)", rendered)
         self.assertIn("Keyboard: ↑/↓ Navigate  enter Select  esc Go Back", rendered)
         visible_choice_lines = [
             line for line in lines
@@ -752,7 +756,7 @@ class TUIPolishTests(unittest.TestCase):
             and line.strip()
         ]
         self.assertEqual(len(visible_choice_lines), 5)
-        self.assertIn("↓ 7 more", rendered)
+        self.assertIn(f"↓ {len(choices) - 5} more", rendered)
 
     def test_model_overlay_scroll_indicators_wrap_visible_choices(self):
         choices = _model_choices(selectable_models(), DEFAULT_MODEL)
@@ -766,13 +770,12 @@ class TUIPolishTests(unittest.TestCase):
             visible_items=5,
         )
 
-        first_choice_index = next(index for index, line in enumerate(lines) if "Gemini 3.1 Pro Preview" in line)
-        selected_index = next(index for index, line in enumerate(lines) if "> Gemini 3 Flash Preview" in line)
-        up_index = lines.index("  ↑ 4 more")
-        down_index = lines.index("  ↓ 3 more")
+        selected_index = next(index for index, line in enumerate(lines) if line.startswith("> "))
+        up_index = next(index for index, line in enumerate(lines) if line.strip().startswith("↑ "))
+        down_index = next(index for index, line in enumerate(lines) if line.strip().startswith("↓ "))
         footer_index = next(index for index, line in enumerate(lines) if line.startswith("Keyboard:"))
 
-        self.assertLess(up_index, first_choice_index)
+        self.assertLess(up_index, selected_index)
         self.assertLess(selected_index, down_index)
         self.assertLess(down_index, footer_index)
         visible_choice_lines = [
@@ -807,21 +810,38 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn(f"{ansi('accent_bright', bold=True)}  ↑ 1 more", output)
         self.assertIn(f"{ansi('accent_bright', bold=True)}  ↓ 1 more", output)
 
-    def test_model_overlay_marks_only_matching_thinking_preset_current(self):
+    def test_model_overlay_marks_the_active_model_current(self):
+        # Rows are keyed by model id now; reasoning is a per-row ←/→ toggle, so
+        # exactly one row (the active model) is marked current.
         choices = _model_choices(selectable_models(), GEMMA_FAST_MODEL, current_thinking="high")
 
         current = [choice for choice in choices if choice.current]
 
         self.assertEqual(len(current), 1)
-        self.assertEqual(current[0].value, "gemma-high")
+        self.assertEqual(current[0].value, GEMMA_FAST_MODEL)
 
-    def test_model_overlay_marks_auto_current_when_routing_enabled(self):
+    def test_model_overlay_never_lists_auto_and_marks_active_under_routing(self):
         choices = _model_choices(selectable_models(), GEMMA_FAST_MODEL, auto_routing=True)
         current = [choice for choice in choices if choice.current]
 
         self.assertFalse(any(choice.value == "auto" for choice in choices))
         self.assertEqual(len(current), 1)
-        self.assertEqual(current[0].value, "gemma")
+        self.assertEqual(current[0].value, GEMMA_FAST_MODEL)
+
+    def test_model_reasoning_toggle_cycles_within_family_ramps(self):
+        from secops_agent.ui.menu import cycle_reasoning, model_reasoning_levels
+
+        # Gemma 4 exposes only off/high; Gemini thinking models take the full ramp;
+        # a non-thinking model exposes no reasoning control at all.
+        self.assertEqual(model_reasoning_levels(GEMMA_FAST_MODEL), ("off", "high"))
+        self.assertEqual(model_reasoning_levels("gemini-2.5-pro"), ("off", "low", "medium", "high"))
+        self.assertEqual(model_reasoning_levels(DEFAULT_MODEL), ())
+
+        levels = model_reasoning_levels("gemini-2.5-pro")
+        self.assertEqual(cycle_reasoning(levels, "off", "right"), "low")
+        self.assertEqual(cycle_reasoning(levels, "off", "left"), "high")
+        self.assertEqual(cycle_reasoning(levels, "high", "right"), "off")
+        self.assertEqual(cycle_reasoning((), "", "right"), "")
 
     def test_permissions_overlay_matches_antigravity_active_permissions_shape(self):
         lines = build_choice_overlay_lines(
@@ -2029,10 +2049,11 @@ class TUIPolishTests(unittest.TestCase):
         output = stream.getvalue()
 
         # No static running row (and thus no premature tag / duplicate ●): the
-        # tool appears once, as the final result row.
+        # tool appears once, as the final result row. The zero-exit trailer is
+        # dropped, so a one-line command reads as its own output, not "2 lines".
         self.assertNotIn("● Bash(date) (ctrl+o to expand)", output)
         self.assertIn("● Bash(date)", output)
-        self.assertIn("⎿  2 lines", output)
+        self.assertIn("⎿  Sun May 31 03:45:11 PM GMT 2026", output)
 
     def test_tool_result_box_render_returns_exact_line_count(self):
         # The ctrl+o toggle clears the collapsed block by line count, so the
@@ -3556,8 +3577,10 @@ class TUIPolishTests(unittest.TestCase):
         asyncio.run(renderer.render_agent_stream(events()))
         output = renderer.console.export_text()
 
-        self.assertIn("[Exit Code: 0]\n\n▸ Thought", output)
-        self.assertNotIn("[Exit Code: 0]\n\n\n▸ Thought", output)
+        # The zero-exit trailer is dropped, so the collapsed row ends on the
+        # command's own output; the single-blank-gap invariant is unchanged.
+        self.assertIn("GMT 2026\n\n▸ Thought", output)
+        self.assertNotIn("GMT 2026\n\n\n▸ Thought", output)
         self.assertNotIn("\n\n\n", output)
 
     def test_empty_mcp_config_is_ignored_and_invalid_json_is_friendly(self):

@@ -57,7 +57,7 @@ from secops_agent.ui.runtime import RuntimeState
 from secops_agent.ui.tool_display import (
     ToolCallBox, ToolResultBox, ApprovalPrompt, format_duration, format_tool_call_text,
     summarize_output, _looks_like_tool_failure, _tool_call_markup, _tool_status_color,
-    _tool_result_log_reference_line,
+    _tool_result_log_reference_line, build_collapsed_result_lines,
 )
 from secops_agent.ui.spool_display import spool_reference, supervised_detail_text
 from secops_agent.ui.error_display import ErrorRenderer
@@ -201,90 +201,13 @@ def _tool_result_status(result: Any) -> str:
 
 
 def _build_collapsed_tool_result_lines(result: Any, *, width: int) -> list[str]:
-    text_failure = bool(getattr(result, "success", False)) and _looks_like_tool_failure(str(getattr(result, "output", "") or ""))
-    log_line = _tool_result_log_reference_line(result, max_width=width)
-    if getattr(result, "success", False) and not text_failure:
-        output = str(getattr(result, "output", "") or "")
-        # agy renders a successful command's output directly on the ⎿ line (e.g.
-        # `⎿ /home/user/project`). Our tools append a trailing "[Exit Code: 0]" line
-        # that would otherwise count as a second line and push single-line output
-        # into the metadata branch (`⎿ 30ms · 2 lines · …`). Drop that trailer for
-        # the collapsed summary only; a non-zero exit code stays (it is diagnostic).
-        _out_lines = output.splitlines()
-        if _out_lines and _out_lines[-1].strip() == "[Exit Code: 0]":
-            output = "\n".join(_out_lines[:-1])
-        summary = summarize_output(
-            output,
-            max_lines=4,
-            max_width=max(24, min(120, width - 8)),
-        )
-        elapsed = format_duration(getattr(result, "execution_time", 0.0)) if getattr(result, "execution_time", 0.0) > 0 else ""
+    """Épuré collapsed result block (one key-fact line + a discreet meta line).
 
-        # P3: when the agent attached a parsed structured summary, lead the
-        # collapsed view with that key fact instead of the raw output head.
-        metadata = getattr(result, "metadata", None)
-        parsed_summary = ""
-        if isinstance(metadata, dict):
-            parsed_summary = str(metadata.get("parsed_summary") or "").strip()
-        if parsed_summary:
-            headline = _fit_cell(parsed_summary.splitlines()[0], max(20, width - 8))
-            lines = [
-                f"  [{COLORS['text_muted']}]⎿  {escape(headline)}[/{COLORS['text_muted']}]"
-                f" [{COLORS['text_dim']}](ctrl+o to expand)[/{COLORS['text_dim']}]"
-            ]
-            for line in summary["lines"][:2]:
-                if line.strip() and line.strip() != headline.strip():
-                    lines.append(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]")
-            if summary["hidden_lines"]:
-                lines.append(
-                    f"     [{COLORS['text_dim']}]... {summary['hidden_lines']:,} more lines hidden[/{COLORS['text_dim']}]"
-                )
-            return lines
-
-        use_single_line = (
-            summary["visible_lines"] == 1
-            and summary["hidden_lines"] == 0
-            and summary["truncated_lines"] == 0
-            and len(summary["lines"][0]) <= max(20, width - 8)
-        )
-        if use_single_line:
-            lines = [f"  [{COLORS['text_muted']}]⎿  {escape(summary['lines'][0])}[/{COLORS['text_muted']}]"]
-            return lines
-
-        metrics = []
-        if elapsed:
-            metrics.append(elapsed)
-        if summary["chars"]:
-            line_label = "line" if summary["total_lines"] == 1 else "lines"
-            metrics.append(f"{summary['total_lines']:,} {line_label}")
-            metrics.append(f"{summary['chars']:,} chars")
-        details = " · ".join(metrics) if metrics else "done"
-        lines = [
-            f"  [{COLORS['text_muted']}]⎿  {escape(details)}[/{COLORS['text_muted']}]"
-            f" [{COLORS['text_dim']}](ctrl+o to expand)[/{COLORS['text_dim']}]"
-        ]
-        if summary["lines"]:
-            lines.extend(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]" for line in summary["lines"])
-            if summary["hidden_lines"]:
-                lines.append(
-                    f"     [{COLORS['text_dim']}]... {summary['hidden_lines']:,} more lines hidden[/{COLORS['text_dim']}]"
-                )
-            elif summary["truncated_lines"]:
-                lines.append(f"     [{COLORS['text_dim']}]... truncated to terminal width[/{COLORS['text_dim']}]")
-        elif not summary["chars"]:
-            lines.append(f"     [{COLORS['text_dim']}]no output[/{COLORS['text_dim']}]")
-        else:
-            lines.append(f"     [{COLORS['text_dim']}]no printable lines[/{COLORS['text_dim']}]")
-        return lines
-
-    error_msg = str(getattr(result, "error", "") or getattr(result, "output", "") or "Unknown error")
-    if len(error_msg) > 120:
-        error_msg = error_msg[:117] + "..."
-    elapsed = f" ({format_duration(getattr(result, 'execution_time', 0.0))})" if getattr(result, "execution_time", 0.0) > 0 else ""
-    lines = [f"  [{COLORS['error']}]⎿  {escape(error_msg)}{elapsed}[/{COLORS['error']}]"]
-    if log_line:
-        lines.append(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
-    return lines
+    Delegates to the shared builder in ``tool_display`` so the live result row
+    and this ctrl+o transcript cache stay byte-for-byte identical, and so the
+    legibility contract (readable text_muted/text_secondary, never text_dim as
+    text) lives in exactly one place."""
+    return build_collapsed_result_lines(result, width=width)
 
 
 def _result_headline(result: Any, fallback: str) -> str:
@@ -307,11 +230,11 @@ def _build_expanded_tool_result_lines(result: Any, *, width: int) -> list[str]:
         lines.append("")
         lines.append(f"  [{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
         lines.extend(
-            f"    [{COLORS['text_dim']}]{escape(_fit_cell(line, max(16, width - 6)))}[/{COLORS['text_dim']}]"
+            f"    [{COLORS['text_muted']}]{escape(_fit_cell(line, max(16, width - 6)))}[/{COLORS['text_muted']}]"
             for line in visible_lines
         )
         if len(output_lines) > len(visible_lines):
-            lines.append(f"    [{COLORS['text_dim']}]... {len(output_lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_dim']}]")
+            lines.append(f"    [{COLORS['text_muted']}]... {len(output_lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_muted']}]")
     return lines
 
 
@@ -467,6 +390,56 @@ def _sanitize_archived_calls(text: str) -> str:
     )
 
 
+_BULLET_LINE_RE = re.compile(r"^\s{0,8}[-*+]\s+\S")
+# The ordered-list lines this module emits are escaped ("1\. body  "), so match
+# the backslash-dot form, not a raw "1. ".
+_ORDERED_DISPLAY_RE = re.compile(r"^\s{0,8}\d+\\\.\s")
+
+
+def _line_block_kind(line: str) -> str:
+    """Classify a normalized line as 'bullet', 'ordered', or 'para' so block
+    boundaries can be detected."""
+    if _BULLET_LINE_RE.match(line):
+        return "bullet"
+    if _ORDERED_DISPLAY_RE.match(line):
+        return "ordered"
+    return "para"
+
+
+def _separate_list_blocks(lines: list[str]) -> list[str]:
+    """Insert a blank line wherever the block kind changes (paragraph ↔ bullet ↔
+    numbered list).
+
+    Rich Markdown treats a list with no blank line before/after it as lazily
+    continuing into the adjacent block, so ``- 443/tcp`` followed by
+    ``Prochaines étapes:`` — or an intro line followed by ``1. …`` — renders as
+    one run-on line. A single blank separator makes each a distinct block; lines
+    of the same kind stay together and fenced code is left untouched."""
+    out: list[str] = []
+    in_fence = False
+    prev_kind = ""
+    for line in lines:
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            prev_kind = ""
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        if line.strip():
+            kind = _line_block_kind(line)
+            # Any kind change involves a list (para↔para cannot "differ"), so a
+            # single blank separates the two blocks.
+            if out and out[-1].strip() and prev_kind and kind != prev_kind:
+                out.append("")
+            prev_kind = kind
+        else:
+            prev_kind = ""
+        out.append(line)
+    return out
+
+
 def normalize_agent_markdown(text: str) -> str:
     """Keep model output visually stable before Rich Markdown renders it."""
     if not text:
@@ -561,6 +534,8 @@ def normalize_agent_markdown(text: str) -> str:
 
         ordered_next = None
         normalized.append(line.rstrip())
+
+    normalized = _separate_list_blocks(normalized)
 
     while normalized and normalized[0] == "":
         normalized.pop(0)
@@ -3867,6 +3842,7 @@ class Renderer:
         live_display: Live | None = None
         last_render_time: float = 0.0
         is_thinking = False
+        turn_start = time.monotonic()
         interrupt = _EscInterruptMonitor()
         turn_items: list[dict[str, Any]] = []
         turn_tools: dict[str, dict[str, Any]] = {}
@@ -4315,6 +4291,27 @@ class Renderer:
                     self._clear_pending_tool_call_row()
 
                     self.render_agent_error(event.error)
+
+            # Sobre end-of-turn marker: a single discreet line, shown only for a
+            # turn that did real work AND fully succeeded (≥1 tool, none failed) —
+            # a plain answer is its own completion, and a failure is already spelled
+            # out on its ⎿ line, so neither prints a ✓. Static text (no motion),
+            # counted into the ctrl+o tail so an in-place expand stays aligned.
+            tool_statuses = [
+                _tool_result_status(item.get("result"))
+                for item in turn_items
+                if item.get("kind") == "tool" and item.get("result") is not None
+            ]
+            all_succeeded = bool(tool_statuses) and all(status == "success" for status in tool_statuses)
+            if all_succeeded and not self._display_prefs.get("hide_turn_summary"):
+                elapsed = time.monotonic() - turn_start
+                count = len(tool_statuses)
+                label = f"{count} tool" + ("s" if count != 1 else "")
+                tail = f" · {format_duration(elapsed)}" if elapsed >= 0.1 else ""
+                self.console.print(
+                    f"  [{COLORS['success']}]✓[/] [{COLORS['text_muted']}]{label}{tail}[/{COLORS['text_muted']}]"
+                )
+                _advance_ctrl_o_tail(1)
 
             if runtime is not None and turn_items:
                 width = _surface_width(self.console)

@@ -274,6 +274,7 @@ def pt_style_dict() -> dict:
         "toolbar_spaces": f"{plain_surface} {COLORS['text_muted']}",
         "toolbar_key": f"{plain_surface} {COLORS['accent_bright']} bold",
         "toolbar_action": f"{plain_surface} {COLORS['text_muted']}",
+        "toolbar_hint": f"{plain_surface} {COLORS['warning']} bold",
         "bottom-toolbar": plain_surface,
         "completion-menu": plain_surface,
         "completion-menu.completion": f"{plain_surface} {COLORS['text']}",
@@ -331,7 +332,13 @@ def get_header_banner(model_name: str = "gemini-2.5-flash") -> str:
     width, _ = shutil.get_terminal_size((80, 24))
     logo_width = max(len(row) for row in SECOPS_MONOGRAM)
 
-    if width < logo_width:
+    # The compact (stacked) layout shows the full metadata; the monogram layout
+    # only has room for it once the terminal is wide enough for the 50-col logo
+    # plus a readable metadata column. Below that, prefer readable metadata over a
+    # logo flanked by 12-char truncations (responsive banner).
+    gap = "  "
+    _MIN_META = 20
+    if width < logo_width + len(gap) + _MIN_META:
         divider = f"{ansi('text_dim')}{'─' * max(1, width - 1)}{reset}"
         banner = (
             f"  {ansi('accent', bold=True)}SECOPS{reset} {ansi('accent', bold=True)}{title}{reset}\n"
@@ -343,7 +350,6 @@ def get_header_banner(model_name: str = "gemini-2.5-flash") -> str:
         )
         return banner
 
-    gap = "  "
     meta_width = max(0, width - logo_width - len(gap))
     metadata = [
         (title, "accent", True),

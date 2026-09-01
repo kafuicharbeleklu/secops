@@ -20,6 +20,7 @@ __all__ = [
     "ToolCallBox", "ToolResultBox", "ApprovalPrompt",
     "format_duration", "format_tool_call_text", "truncate_output", "summarize_output",
     "reset_session_permissions", "_tool_result_log_reference_line",
+    "build_collapsed_result_lines",
 ]
 
 
@@ -836,6 +837,99 @@ class ToolCallBox:
 
 # ── Tool Result Display ───────────────────────────────────────────────
 
+def _drop_trailing_zero_exit(output: str) -> str:
+    """Drop a trailing ``[Exit Code: 0]`` trailer for the collapsed summary.
+
+    Our tools append this marker so a successful single-line command (``pwd``,
+    ``date``) would otherwise count as two lines and read as ``2 lines`` instead
+    of its actual output. A non-zero exit code is diagnostic and kept."""
+    lines = output.splitlines()
+    if lines and lines[-1].strip() == "[Exit Code: 0]":
+        return "\n".join(lines[:-1])
+    return output
+
+
+def build_collapsed_result_lines(result: ToolResult, *, width: int) -> list[str]:
+    """Build the épuré collapsed result block as Rich-markup lines.
+
+    Claude-Code-style legibility: one key-fact line, plus at most one discreet
+    meta line (``+N lines · ctrl+o to expand``); the raw body lives under ctrl+o.
+    Contrast is the point — the fact renders in ``text_secondary`` and the corner
+    / meta in ``text_muted``, never ``text_dim`` (a rule colour that is illegible
+    as text on the dark ground, the cause of the old unreadable ⎿ previews).
+
+    Shared by ``ToolResultBox.render`` (live row) and the renderer's ctrl+o
+    transcript builder so both surfaces stay byte-for-byte in sync."""
+    corner = COLORS["text_muted"]
+    fact = COLORS["text_secondary"]
+    meta = COLORS["text_muted"]
+
+    text_failure = result.success and _looks_like_tool_failure(result.output)
+    log_line = _tool_result_log_reference_line(result, max_width=width)
+
+    if not result.success or text_failure:
+        raw = result.error or result.output or "Unknown error"
+        error_msg = raw.strip().splitlines()[0] if raw.strip() else "Unknown error"
+        if len(error_msg) > 120:
+            error_msg = error_msg[:117] + "..."
+        elapsed = f" ({format_duration(result.execution_time)})" if result.execution_time > 0 else ""
+        lines = [f"  [{COLORS['error']}]⎿  {escape(error_msg)}{elapsed}[/{COLORS['error']}]"]
+        if log_line:
+            lines.append(f"[{meta}]{escape(log_line)}[/{meta}]")
+        return lines
+
+    output = _drop_trailing_zero_exit(str(result.output or ""))
+    metadata = result.metadata or {}
+    parsed_summary = str(metadata.get("parsed_summary") or "").strip()
+    summary = summarize_output(output, max_lines=4, max_width=max(24, min(120, width - 8)))
+    elapsed = format_duration(result.execution_time) if result.execution_time > 0 else ""
+    hint = f"[{meta}](ctrl+o to expand)[/{meta}]"
+    nonempty = [ln for ln in output.splitlines() if ln.strip()]
+
+    # 0) A non-zero exit trailer survived the drop → surface it. It is the whole
+    # point of the row (a soft failure), so it must never be buried under a
+    # metrics summary. Lead with the command's own text, keep the code on meta.
+    if nonempty:
+        exit_match = re.match(r"^\[Exit Code:\s*(-?\d+)\]$", nonempty[-1].strip())
+        if exit_match and exit_match.group(1) != "0":
+            body = [ln for ln in nonempty if not ln.strip().startswith("[Exit Code:")]
+            headline = _fit_display(body[0] if body else f"exit {exit_match.group(1)}", max(20, width - 8))
+            return [
+                f"  [{corner}]⎿  [/{corner}][{fact}]{escape(headline)}[/{fact}]",
+                f"     [{meta}][Exit Code: {exit_match.group(1)}] · [/{meta}]{hint}",
+            ]
+
+    # 1) Structured key fact from a parser → lead with it; detail under ctrl+o.
+    if parsed_summary:
+        headline = _fit_display(parsed_summary.splitlines()[0], max(20, width - 8))
+        lines = [f"  [{corner}]⎿  [/{corner}][{fact}]{escape(headline)}[/{fact}]"]
+        if nonempty:
+            lines.append(f"     [{meta}]+{len(nonempty):,} lines · [/{meta}]{hint}")
+        return lines
+
+    # 2) Single meaningful line → render it directly on the corner.
+    if summary["total_lines"] <= 1 and summary["lines"]:
+        line = _fit_display(summary["lines"][0], max(20, width - 6))
+        lines = [f"  [{corner}]⎿  [/{corner}][{fact}]{escape(line)}[/{fact}]"]
+        if log_line:
+            lines.append(f"[{meta}]{escape(log_line)}[/{meta}]")
+        return lines
+
+    # 3) Multiline without a parser → concise metrics headline; body under ctrl+o.
+    metrics = []
+    if elapsed:
+        metrics.append(elapsed)
+    if summary["chars"]:
+        line_label = "line" if summary["total_lines"] == 1 else "lines"
+        metrics.append(f"{summary['total_lines']:,} {line_label}")
+        metrics.append(f"{summary['chars']:,} chars")
+    details = " · ".join(metrics) if metrics else ("no output" if not summary["chars"] else "done")
+    lines = [f"  [{corner}]⎿  [/{corner}][{fact}]{escape(details)}[/{fact}] {hint}"]
+    if log_line:
+        lines.append(f"[{meta}]{escape(log_line)}[/{meta}]")
+    return lines
+
+
 class ToolResultBox:
     """Renders tool result collapsed (Antigravity style).
     Success: appends (ctrl+o to expand) to the tool call line.
@@ -860,8 +954,9 @@ class ToolResultBox:
 
         text_failure = result.success and _looks_like_tool_failure(result.output)
         log_line = _tool_result_log_reference_line(result, max_width=console.width)
+
+        # ── agy-verified diff rendering for write/create tools (kept verbatim) ──
         if result.success and not text_failure:
-            # ── agy-verified diff rendering for write/create tools ──
             is_write = tool_name in ToolResultBox._WRITE_TOOL_NAMES or \
                 any(alias in tool_name for alias in ("write_file", "create"))
             metadata = result.metadata or {}
@@ -885,104 +980,20 @@ class ToolResultBox:
                     if len(display_line) > safe_width:
                         display_line = display_line[:safe_width - 3] + "..."
                     emit(
-                        f"     [{COLORS['text_dim']}]{line_no:>4}[/{COLORS['text_dim']}] "
+                        f"     [{COLORS['text_muted']}]{line_no:>4}[/{COLORS['text_muted']}] "
                         f"[{COLORS['success']}]+    {escape(display_line)}[/{COLORS['success']}]"
                     )
                 if len(content_lines) > max_display:
                     emit(
-                        f"     [{COLORS['text_dim']}]... {len(content_lines) - max_display:,} more lines[/{COLORS['text_dim']}]"
+                        f"     [{COLORS['text_muted']}]... {len(content_lines) - max_display:,} more lines[/{COLORS['text_muted']}]"
                     )
                 if log_line:
-                    emit(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
+                    emit(f"[{COLORS['text_muted']}]{escape(log_line)}[/{COLORS['text_muted']}]")
                 return printed
 
-            # ── Standard result rendering ──
-            summary = summarize_output(
-                result.output,
-                max_lines=4,
-                max_width=max(24, min(120, console.width - 8)),
-            )
-            elapsed = format_duration(result.execution_time) if result.execution_time > 0 else ""
-
-            # Lead the collapsed view with the parsed structured fact when the
-            # agent attached one (e.g. "3 service(s) on 10.10.10.5"), instead of
-            # a metrics line + raw output head. Raw detail stays under ctrl+o.
-            metadata = result.metadata or {}
-            parsed_summary = str(metadata.get("parsed_summary") or "").strip()
-            if parsed_summary:
-                safe_width = max(20, console.width - 8)
-                headline = parsed_summary.splitlines()[0]
-                if len(headline) > safe_width:
-                    headline = headline[: safe_width - 1] + "…"
-                emit(
-                    f"  [{COLORS['text_muted']}]⎿  {escape(headline)}[/{COLORS['text_muted']}]"
-                    f" [{COLORS['text_dim']}](ctrl+o to expand)[/{COLORS['text_dim']}]"
-                )
-                for line in summary["lines"][:2]:
-                    if line.strip() and line.strip() != headline.strip():
-                        emit(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]")
-                if summary["hidden_lines"]:
-                    emit(
-                        f"     [{COLORS['text_dim']}]... {summary['hidden_lines']:,} more lines hidden[/{COLORS['text_dim']}]"
-                    )
-                if log_line:
-                    emit(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
-                return printed
-
-            if summary["total_lines"] == 1 and summary["lines"]:
-                line = summary["lines"][0]
-                emit(
-                    f"  [{COLORS['text_muted']}]⎿  {escape(line)}[/{COLORS['text_muted']}]"
-                )
-                if log_line:
-                    emit(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
-                return printed
-
-            use_single_line = False
-            metrics = []
-            if elapsed:
-                metrics.append(elapsed)
-            if summary["chars"]:
-                line_label = "line" if summary["total_lines"] == 1 else "lines"
-                metrics.append(f"{summary['total_lines']:,} {line_label}")
-                metrics.append(f"{summary['chars']:,} chars")
-            if _is_passive_tool(tool_name):
-                metrics.append("passive")
-
-            details = " · ".join(metrics) if metrics else "done"
-            emit(
-                f"  [{COLORS['text_muted']}]⎿  {details}[/{COLORS['text_muted']}]"
-                f" [{COLORS['text_dim']}](ctrl+o to expand)[/{COLORS['text_dim']}]"
-            )
-
-            if summary["lines"]:
-                for line in summary["lines"]:
-                    emit(f"     [{COLORS['text_dim']}]{escape(line)}[/{COLORS['text_dim']}]")
-                if summary["hidden_lines"]:
-                    emit(
-                        f"     [{COLORS['text_dim']}]... {summary['hidden_lines']:,} more lines hidden[/{COLORS['text_dim']}]"
-                    )
-                elif summary["truncated_lines"]:
-                    emit(
-                        f"     [{COLORS['text_dim']}]... truncated to terminal width[/{COLORS['text_dim']}]"
-                    )
-            elif not summary["chars"]:
-                emit(f"     [{COLORS['text_dim']}]no output[/{COLORS['text_dim']}]")
-            else:
-                emit(f"     [{COLORS['text_dim']}]no printable lines[/{COLORS['text_dim']}]")
-            # Log reference line suppressed — output summary above is sufficient.
-        else:
-            # Show error inline
-            error_msg = result.error or result.output or "Unknown error"
-            if len(error_msg) > 120:
-                error_msg = error_msg[:117] + "..."
-            elapsed = f" ({format_duration(result.execution_time)})" if result.execution_time > 0 else ""
-            emit(
-                f"  [{COLORS['error']}]⎿  {escape(error_msg)}{elapsed}[/{COLORS['error']}]"
-            )
-            if log_line:
-                emit(f"[{COLORS['text_dim']}]{escape(log_line)}[/{COLORS['text_dim']}]")
-
+        # ── Standard / parsed / single-line / error → shared épuré builder ──
+        for line in build_collapsed_result_lines(result, width=console.width):
+            emit(line)
         return printed
 
 

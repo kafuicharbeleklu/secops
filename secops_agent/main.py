@@ -629,7 +629,7 @@ def _set_model_selection(
     route = "auto routing" if getattr(agent.llm, "model_auto_routing", False) else "manual"
     current_thinking = getattr(agent.llm, "current_thinking_level", "")
     if profile.supports_thinking:
-        thinking_label = "High" if current_thinking == "high" else "Off"
+        thinking_label = (current_thinking or "off").capitalize()
     else:
         thinking_label = "Default"
     if persist:
@@ -1208,8 +1208,14 @@ async def run_chat_loop(
 
                 if user_input is None:
                     continue
+
+                # Ctrl+C confirmed on an empty prompt → quit like /exit.
+                if user_input == InputHandler.QUIT_REQUEST:
+                    renderer.render_status("Goodbye.")
+                    break
+
                 runtime.reset_ctrl_o_surface()
-    
+
                 # Handle '?' shortcut guide
                 if user_input == InputHandler.SHORTCUT_REQUEST:
                     renderer.render_help(
@@ -1830,14 +1836,14 @@ async def run_chat_loop(
                             thinking = rest[0] if rest else None
                             new = raw_model
                         else:
-                            new = switch_model_menu(
+                            selection = switch_model_menu(
                                 models,
                                 agent.llm.model_name,
                                 auto_routing=getattr(agent.llm, "model_auto_routing", False),
                                 current_thinking=getattr(agent.llm, "current_thinking_level", ""),
                                 prompt_frame=interactive_surface,
                             )
-                            thinking = None
+                            new, thinking = selection if selection else (None, None)
                         if interactive_surface:
                             renderer.render_user_input(stripped, trailing_blank=False, separator=False)
                         if new:

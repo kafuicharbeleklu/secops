@@ -218,8 +218,12 @@ def build_choice_overlay_lines(
     show_descriptions: bool = False,
     current_marker_column: int | None = None,
     visible_items: int | None = None,
+    selected_suffix: str = "",
 ) -> list[str]:
-    """Build the plain-text choice overlay used by the interactive renderer."""
+    """Build the plain-text choice overlay used by the interactive renderer.
+
+    ``selected_suffix`` is appended to the highlighted row only — used by the
+    model picker to render the inline ←/→ reasoning control on the focused row."""
     width = max(1, width - 1)
     height = max(10, height)
     detail_lines = detail_lines or []
@@ -257,6 +261,8 @@ def build_choice_overlay_lines(
                 text = f"{label}{spaces}(current)"
             else:
                 text = f"{item.label}{suffix}"
+            if index == selected and selected_suffix:
+                text = f"{text}{selected_suffix}"
             lines.append(f"{cursor}{_fit(text, row_width)}")
 
     if hidden_below:
@@ -405,8 +411,14 @@ def choose_overlay(
     current_marker_column: int | None = None,
     on_delete: Optional[Callable[[str], bool]] = None,
     visible_items: int | None = None,
+    on_horizontal: Optional[Callable[[int, str], None]] = None,
+    suffix_provider: Optional[Callable[[int], str]] = None,
 ) -> str | None:
-    """Interactive inline choice list matching Antigravity's command picker."""
+    """Interactive inline choice list matching Antigravity's command picker.
+
+    ``on_horizontal(selected, "left"|"right")`` is invoked when ←/→ is pressed
+    (used to toggle a per-row option such as reasoning level); ``suffix_provider
+    (selected)`` returns a string rendered inline on the focused row."""
     if not sys.stdin.isatty() or not choices:
         return None
 
@@ -455,6 +467,7 @@ def choose_overlay(
             show_descriptions=show_descriptions,
             current_marker_column=current_marker_column,
             visible_items=visible_items,
+            selected_suffix=suffix_provider(selected) if suffix_provider else "",
         )
         if prompt_frame and lines and lines[0] == "":
             lines = lines[1:]
@@ -541,6 +554,9 @@ def choose_overlay(
                 render()
             elif key == "end":
                 selected = len(choices) - 1
+                render()
+            elif key in ("left", "right") and on_horizontal is not None:
+                on_horizontal(selected, key)
                 render()
             elif key in ("delete", "ctrl+delete", "ctrl+d"):
                 if on_delete:
