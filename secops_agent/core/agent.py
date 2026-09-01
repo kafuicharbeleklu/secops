@@ -298,6 +298,10 @@ class SecOpsAgent:
         self.permissions = permissions or PermissionEngine()
         self.hooks = hooks or HookManager()
         self.max_iterations = max_iterations
+        # Inter-turn no-progress guard (#1b): the last turn's primary tool
+        # signature and how many consecutive turns have repeated it.
+        self._prev_turn_tool_signatures: tuple[str, ...] = ()
+        self._cross_turn_repeat_streak: int = 0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self._turn_count = 0
@@ -2220,6 +2224,28 @@ class SecOpsAgent:
             else:
                 repeated_iteration_streak = 0
             previous_iter_signatures = current_iter_signatures
+
+            # Inter-turn no-progress guard (#1b): the intra-turn guard above only
+            # sees repetition within one turn; a weak model can re-issue the same
+            # call across separate turns ("continue"/"ok"). Track the turn's first
+            # action and nudge (not stop) when it repeats across turns.
+            if iteration == 1:
+                if current_iter_signatures and current_iter_signatures == self._prev_turn_tool_signatures:
+                    self._cross_turn_repeat_streak += 1
+                else:
+                    self._cross_turn_repeat_streak = 0
+                self._prev_turn_tool_signatures = current_iter_signatures
+                if self._cross_turn_repeat_streak >= 2:
+                    loop_nudge = (
+                        "You have issued the identical tool call across the last few "
+                        "turns with no change in the result. Do not repeat it - switch "
+                        "tool or approach. For a file upload use http_request with "
+                        "upload_content / upload_field_name / form_fields (one POST), "
+                        "not a GET."
+                    )
+                    self.memory.add_assistant_message(loop_nudge)
+                    yield StatusEvent(loop_nudge)
+                    self._cross_turn_repeat_streak = 0
 
             if repeated_iteration_streak >= 2:
                 stall_msg = (
