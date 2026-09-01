@@ -62,6 +62,17 @@ def _terminal_width(default: int = 80) -> int:
     return max(1, min(widths) if widths else default)
 
 
+# Cap the decorative prompt/toolbar frame so the border rule and statusline do
+# not sprawl edge-to-edge on ultra-wide terminals (STAT). 120 matches the
+# content cap already used in renderer.py. The input buffer keeps full width.
+_FRAME_MAX_WIDTH = 120
+
+
+def _frame_width(width: int) -> int:
+    """Clamp the prompt-frame width to a comfortable reading width."""
+    return max(1, min(int(width or 0), _FRAME_MAX_WIDTH))
+
+
 def _terminal_height(default: int = 24) -> int:
     try:
         return max(1, shutil.get_terminal_size((80, default)).lines)
@@ -1150,7 +1161,7 @@ class InputHandler:
 
     def _get_toolbar(self):
         """Antigravity-style toolbar: border top, shortcuts left, model right."""
-        width = _terminal_width()
+        width = _frame_width(_terminal_width())
 
         # Check if completion is active
         is_completing = False
@@ -1235,7 +1246,7 @@ class InputHandler:
             ]
 
     def _prompt_fragments(self):
-        width = _terminal_width()
+        width = _frame_width(_terminal_width())
         return [
             ("class:prompt_border", _prompt_separator(width) + "\n"),
             ("class:prompt", "> "),

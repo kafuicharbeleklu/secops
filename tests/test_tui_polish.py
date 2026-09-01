@@ -47,6 +47,7 @@ try:
         _edit_text_in_external_editor,
         _footer_parts,
         _fit_segments,
+        _frame_width,
         _artifact_status_color,
         _latest_expandable_artifact,
         _prompt_separator,
@@ -523,6 +524,30 @@ class TUIPolishTests(unittest.TestCase):
     def test_prompt_separator_avoids_terminal_edge_wrap(self):
         self.assertEqual(_prompt_separator(1), "─")
         self.assertEqual(len(_prompt_separator(100)), 99)
+
+    def test_frame_width_caps_wide_terminals(self):
+        # STAT: the decorative prompt/toolbar frame must not sprawl edge-to-edge.
+        self.assertEqual(_frame_width(80), 80)     # narrow: unchanged
+        self.assertEqual(_frame_width(120), 120)   # at the cap
+        self.assertEqual(_frame_width(200), 120)   # ultra-wide: clamped
+        self.assertGreaterEqual(_frame_width(0), 1)
+
+    def test_toolbar_and_prompt_rule_capped_on_wide_terminal(self):
+        import secops_agent.ui.input_handler as ih
+
+        handler = InputHandler()
+        handler._statusline = {"state": "idle", "tools": 30, "tasks": 2}
+        original = ih._terminal_width
+        try:
+            ih._terminal_width = lambda default=80: 200
+            toolbar_rule = handler._get_toolbar()[0][1].rstrip("\n")
+            prompt_rule = handler._prompt_fragments()[0][1].rstrip("\n")
+        finally:
+            ih._terminal_width = original
+        # 200-col terminal -> rule clamped to the 120 frame (119 chars), not 199
+        self.assertLessEqual(len(toolbar_rule), 120)
+        self.assertLessEqual(len(prompt_rule), 120)
+        self.assertEqual(len(toolbar_rule), len(prompt_rule))
 
     def test_footer_parts_fit_after_terminal_resize(self):
         left, spaces, right = _footer_parts("? for shortcuts", "Gemma 4 26B", 18)
