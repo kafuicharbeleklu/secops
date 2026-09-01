@@ -45,7 +45,13 @@ from secops_agent import __version__
 from secops_agent.ui.theme import rich_theme, COLORS, friendly_model_name, reduced_motion
 from secops_agent.ui.commands import iter_commands
 from secops_agent.ui.animations import ThinkingSpinner, ToolExecutionSpinner, thinking_label_for_phase
-from secops_agent.ui.overlay import OverlayRow, build_choice_overlay_lines, read_terminal_key, render_overlay
+from secops_agent.ui.overlay import (
+    OverlayRow,
+    build_choice_overlay_lines,
+    build_theme_picker_lines,
+    read_terminal_key,
+    render_overlay,
+)
 from secops_agent.ui.panel import PanelRow, choose_panel
 from secops_agent.ui.runtime import RuntimeState
 from secops_agent.ui.tool_display import (
@@ -1851,6 +1857,96 @@ class Renderer:
         finally:
             clear_rendered()
         return selected_item
+
+    def render_theme_picker(
+        self,
+        *,
+        active: str = "",
+        status_right: str = "",
+        prompt_frame: bool = False,
+    ) -> str | None:
+        """Interactive theme picker with a live, coloured preview of the pointed
+        palette (FMT-05b+). Returns the chosen palette name, or None if cancelled
+        or when the surface is not an interactive TTY."""
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return None
+        from secops_agent.ui import theme as _theme
+
+        names = list(_theme.available_themes())
+        if not names:
+            return None
+        selected = names.index(active) if active in names else 0
+        rendered_lines = 0
+        chosen: str | None = None
+
+        def read_key() -> str:
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                key = read_terminal_key(fd, escape_timeout=0.2)
+                if key == "mouse_up":
+                    return "up"
+                if key == "mouse_down":
+                    return "down"
+                return key
+            finally:
+                termios.tcsetattr(fd, termios.TCSANOW, old_settings)
+
+        def statusline(left: str, right: str, width: int) -> str:
+            if not right:
+                return _fit_cell(left, width)
+            right = _fit_cell(right, max(10, width - len(left) - 2))
+            return f"{left}{' ' * max(1, width - len(left) - len(right) - 1)}{right}"
+
+        def render() -> None:
+            nonlocal rendered_lines
+            columns, rows = shutil.get_terminal_size((96, 28))
+            content_height = _transient_content_height(rows, prompt_frame=prompt_frame)
+            lines = build_theme_picker_lines(
+                selected, width=columns, height=content_height, active=active
+            )
+            if prompt_frame and lines and lines[0] == "":
+                lines = lines[1:]
+            if prompt_frame:
+                separator = _turn_separator(columns)
+                lines = [separator, ">", separator, *lines]
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append(statusline("esc to cancel", status_right, columns))
+            if rendered_lines:
+                sys.stdout.write(f"\x1b[{rendered_lines}A\x1b[J")
+            for line in lines:
+                sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+            rendered_lines = len(lines)
+
+        def clear_rendered() -> None:
+            nonlocal rendered_lines
+            if rendered_lines:
+                sys.stdout.write(f"\x1b[{rendered_lines}A\x1b[J")
+                rendered_lines = 0
+            sys.stdout.write("\x1b[?25h")
+            sys.stdout.flush()
+
+        sys.stdout.write("\x1b[?25l")
+        sys.stdout.flush()
+        try:
+            while True:
+                render()
+                key = read_key()
+                if key == "up":
+                    selected = (selected - 1) % len(names)
+                elif key == "down":
+                    selected = (selected + 1) % len(names)
+                elif key == "enter":
+                    chosen = names[selected]
+                    break
+                elif key == "esc":
+                    break
+        finally:
+            clear_rendered()
+        return chosen
 
     def render_permissions(
         self,

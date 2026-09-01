@@ -243,5 +243,91 @@ class ReefThemeTests(unittest.TestCase):
         self.assertTrue(r > g and r > b, "reef error should be an unambiguous red")
 
 
+class ThemePickerLinesTests(unittest.TestCase):
+    """The interactive picker's pure line builder (build_theme_picker_lines)."""
+
+    def _lines(self, selected, active="", force_color=True):
+        from secops_agent.ui.overlay import build_theme_picker_lines
+        env = {"CLICOLOR_FORCE": "1"} if force_color else {"NO_COLOR": "1", "CLICOLOR_FORCE": ""}
+        with patch.dict(os.environ, env, clear=False):
+            if not force_color:
+                os.environ.pop("CLICOLOR_FORCE", None)
+            return build_theme_picker_lines(selected, width=60, active=active)
+
+    def test_lists_every_palette_and_marks_active(self):
+        joined = "\n".join(self._lines(0, active="paprika"))
+        for name in ("paprika", "ocean", "vivid", "reef", "light"):
+            self.assertIn(name, joined)
+        self.assertIn("(current)", joined)
+
+    def test_cursor_marks_the_selected_row(self):
+        lines = self._lines(2)  # vivid
+        selected_rows = [ln for ln in lines if ln.startswith("> ")]
+        self.assertEqual(len(selected_rows), 1)
+        self.assertIn("vivid", selected_rows[0])
+
+    def test_preview_uses_the_selected_palettes_accent(self):
+        # reef accent #43aa8b -> ANSI 67;170;139 appears in the coloured preview
+        joined = "\n".join(self._lines(3))  # reef
+        self.assertIn("67;170;139", joined)
+
+    def test_light_preview_paints_a_white_ground(self):
+        # the light palette preview must sit on an explicit white background so its
+        # dark signals stay visible on a dark terminal (48;2;255;255;255 = bg white)
+        joined = "\n".join(self._lines(4))  # light
+        self.assertIn("48;2;255;255;255", joined)
+
+    def test_dark_preview_paints_the_dark_ground(self):
+        joined = "\n".join(self._lines(0))  # paprika, dark ground #18181b
+        self.assertIn("48;2;24;24;27", joined)
+
+    def test_plain_text_without_colour(self):
+        joined = "\n".join(self._lines(0, force_color=False))
+        self.assertIn("paprika", joined)
+        self.assertNotIn("\x1b[", joined)  # no ANSI when colour disabled
+
+
+class ThemePickerLoopTests(unittest.TestCase):
+    """Drive the real render_theme_picker key loop deterministically (no PTY)."""
+
+    def _run(self, keys):
+        import io as _io
+        from unittest import mock
+        import secops_agent.ui.renderer as rmod
+
+        script = list(keys)
+
+        def fake_key():
+            return script.pop(0) if script else "esc"
+
+        buf = _io.StringIO()
+        with mock.patch.object(rmod.sys, "stdin") as stdin, \
+             mock.patch.object(rmod.sys, "stdout") as stdout, \
+             mock.patch.object(rmod, "read_terminal_key", side_effect=lambda *a, **k: fake_key()), \
+             mock.patch.object(rmod, "termios", create=True), \
+             mock.patch.object(rmod, "tty", create=True), \
+             mock.patch.object(rmod.shutil, "get_terminal_size", return_value=(96, 28)):
+            stdin.isatty.return_value = True
+            stdout.isatty.return_value = True
+            stdout.write = buf.write
+            stdout.flush = lambda: None
+            stdin.fileno.return_value = 0
+            return rmod.Renderer().render_theme_picker(active="paprika")
+
+    def test_enter_selects_current(self):
+        self.assertEqual(self._run(["enter"]), "paprika")
+
+    def test_down_navigates_then_enter(self):
+        # paprika -> ocean -> vivid
+        self.assertEqual(self._run(["down", "down", "enter"]), "vivid")
+
+    def test_up_wraps_to_last(self):
+        # from paprika, up wraps to the last palette (light)
+        self.assertEqual(self._run(["up", "enter"]), "light")
+
+    def test_esc_cancels(self):
+        self.assertIsNone(self._run(["down", "esc"]))
+
+
 if __name__ == "__main__":
     unittest.main()

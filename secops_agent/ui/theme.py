@@ -222,6 +222,14 @@ def ansi_hex(hex_color: str, bold: bool = False) -> str:
     return f"\x1b[38;2;{r};{g};{b}m"
 
 
+def ansi_bg_hex(hex_color: str) -> str:
+    """Convert a raw hex color to a TrueColor ANSI *background* escape sequence."""
+    if not color_enabled():
+        return ""
+    r, g, b = _hex_to_rgb(hex_color)
+    return f"\x1b[48;2;{r};{g};{b}m"
+
+
 def hyperlink(label: str, url: str) -> str:
     """Rich markup for an OSC 8 terminal hyperlink (X-03).  Rich emits the escape
     only where the terminal supports links and otherwise renders the label

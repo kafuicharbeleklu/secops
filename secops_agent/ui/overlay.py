@@ -272,6 +272,71 @@ def build_choice_overlay_lines(
     return [_fit(line, width) for line in lines]
 
 
+THEME_PICKER_FOOTER = "↑/↓ Preview  enter Apply  esc Go Back"
+
+
+def build_theme_picker_lines(
+    selected: int = 0,
+    *,
+    width: int = 96,
+    height: int = 28,
+    active: str = "",
+) -> list[str]:
+    """Build the interactive theme picker: a name list plus a live, coloured
+    preview of the highlighted palette on ITS OWN ground (dark, or white for the
+    light theme so its dark signals stay visible). Lines already embed ANSI and
+    are printed verbatim by the transient renderer."""
+    from secops_agent.ui import theme
+
+    names = list(theme.available_themes())
+    if not names:
+        return ["", _fit("Choose a theme", max(1, width - 1)), "", "  No themes.", ""]
+
+    selected = min(max(0, selected), len(names) - 1)
+    W = max(20, width - 1)
+    reset = theme.ANSI_RESET if theme.color_enabled() else ""
+    muted = theme.ansi_hex("#82828b")
+
+    lines = ["", _fit("Choose a theme", W), ""]
+
+    for index, name in enumerate(names):
+        palette = theme._PALETTES[name]
+        cursor = "> " if index == selected else "  "
+        accent = theme.ansi_hex(palette["accent"], bold=(index == selected))
+        ground = "light" if theme.is_light_theme(name) else "dark"
+        marker = "  (current)" if name == active else ""
+        lines.append(f"{cursor}{accent}{name}{reset}{muted} · {ground} ground{marker}{reset}")
+
+    # Live preview of the highlighted palette, painted on its own ground.
+    name = names[selected]
+    palette = theme._PALETTES[name]
+    bg = theme.ansi_bg_hex(theme.ground_for(name))
+    preview_width = min(W - 2, 54)
+
+    def band(cells: list[tuple[str, str]]) -> str:
+        inner = " "
+        visible = 1
+        for hexc, text in cells:
+            inner += theme.ansi_hex(hexc) + text + reset + bg + "  "
+            visible += len(text) + 2
+        if visible < preview_width:
+            inner += " " * (preview_width - visible)
+        return "  " + bg + inner + reset
+
+    lines.append("")
+    lines.append(band([
+        (palette["accent"], "● accent"), (palette["success"], "✔ ok"),
+        (palette["warning"], "⚠ warn"), (palette["error"], "✖ err"),
+    ]))
+    lines.append(band([
+        (palette["text_muted"], "R0 R1 R2"), (palette["warning"], "R3 R4 R5"),
+        (palette["error"], "R6 R7"), (palette["danger_bright"], "R8"),
+    ]))
+    lines.append("")
+    lines.append(_fit(THEME_PICKER_FOOTER, W))
+    return lines
+
+
 def render_overlay(
     console: Console,
     title: str,

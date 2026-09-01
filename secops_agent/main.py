@@ -1449,7 +1449,27 @@ async def run_chat_loop(
                         from secops_agent.ui import theme as _theme_mod
                         requested = arg.strip().lower()
                         options = " | ".join(_theme_mod.available_themes())
-                        if not requested:
+                        if not requested and interactive_surface:
+                            picked = renderer.render_theme_picker(
+                                active=_theme_mod.active_theme_name(),
+                                status_right=_status_right(agent, runtime),
+                                prompt_frame=interactive_surface,
+                            )
+                            renderer.render_user_input(stripped, trailing_blank=False, separator=False)
+                            if not picked:
+                                renderer.render_status(f"Exited {cmd} command")
+                            else:
+                                resolved = _theme_mod.set_theme(picked)
+                                try:
+                                    renderer.console.push_theme(_theme_mod.rich_theme)
+                                except Exception:
+                                    pass
+                                input_handler.refresh_theme()
+                                save_theme_preference(resolved)
+                                renderer.render_success(
+                                    f"Theme set to {resolved} and saved for the next launch."
+                                )
+                        elif not requested:
                             renderer.render_status(
                                 f"Theme: {_theme_mod.active_theme_name()}. "
                                 f"Available: {options}. Usage: /theme <name>."
