@@ -14,14 +14,26 @@ from secops_agent.core.model_catalog import model_display_name
 from rich.theme import Theme
 
 # ── Palettes ─────────────────────────────────────────────────────────
-# Rule: Color is a signal, not decoration. Three named palettes on the terminal
-# ground; the text greys are shared, only the four signal hues change. Select
-# with SECOPS_THEME or the /theme command (paprika | ocean | vivid).
+# Rule: Color is a signal, not decoration. Each palette maps four signal hues
+# (accent / success / warning / error) onto a terminal ground. The dark palettes
+# share light text greys (_TEXT); the light palette flips to dark text (_TEXT_LIGHT)
+# for a light terminal. Select with SECOPS_THEME or /theme.
 
+# Dark-ground text greys (light-on-dark).
 _TEXT = {
     "text": "#e4e4e7", "text_secondary": "#a1a1aa", "text_muted": "#82828b",
     "text_dim": "#3f3f46", "tool_name": "#e4e4e7",
 }
+# Light-ground text greys (dark-on-light) for a light terminal.
+_TEXT_LIGHT = {
+    "text": "#18181b", "text_secondary": "#3f3f46", "text_muted": "#52525b",
+    "text_dim": "#a1a1aa", "tool_name": "#18181b",
+}
+
+# Reference grounds used to reason about (and test) contrast per palette.
+_DARK_GROUND = "#18181b"
+_LIGHT_GROUND = "#ffffff"
+
 _PALETTES = {
     # Spicy Paprika — warm, grounded: steel accent, olive/orange/paprika signals.
     "paprika": {
@@ -44,15 +56,49 @@ _PALETTES = {
         "error": "#f21b3f", "danger": "#f21b3f", "danger_bright": "#ff4864",
         "tool_border": "#2a6b6b",
     },
+    # Reef — balanced, diverse (from the 7-colour set): seagrass accent, a fern
+    # success, gold warning and a coral red. Every signal >= 4.5 on the dark ground.
+    "reef": {
+        **_TEXT, "accent": "#43aa8b", "accent_bright": "#76c893",
+        "success": "#90be6d", "warning": "#f9c74f",
+        "error": "#f94144", "danger": "#f94144", "danger_bright": "#ff6b6b",
+        "tool_border": "#3a5560",
+    },
+    # Light — for a light terminal: dark text, deeper signals. Warm/green signals
+    # cannot reach 4.5 on white, so they sit at WCAG non-text 3:1 as bold glyphs;
+    # accent (>=4.5) and error (>=4.0) stay text-grade, and body text is >= 7:1.
+    "light": {
+        **_TEXT_LIGHT, "accent": "#1a759f", "accent_bright": "#1e6091",
+        "success": "#0a9396", "warning": "#ca6702",
+        "error": "#d62828", "danger": "#d62828", "danger_bright": "#9d0208",
+        "tool_border": "#457b9d",
+    },
 }
 _DEFAULT_THEME = "paprika"
+
+# Ground each palette is tuned for (contrast reference + light/dark awareness).
+_PALETTE_GROUND = {
+    "paprika": _DARK_GROUND, "ocean": _DARK_GROUND, "vivid": _DARK_GROUND,
+    "reef": _DARK_GROUND, "light": _LIGHT_GROUND,
+}
 
 
 def resolve_theme_name() -> str:
     """Resolve the active theme: SECOPS_THEME selects a named palette
-    (paprika | ocean | vivid); anything else falls back to the default."""
+    (paprika | ocean | vivid | reef | light); anything else falls back to
+    the default."""
     pref = os.environ.get("SECOPS_THEME", "").strip().lower()
     return pref if pref in _PALETTES else _DEFAULT_THEME
+
+
+def ground_for(name: str) -> str:
+    """The reference background a palette is tuned against."""
+    return _PALETTE_GROUND.get(str(name or "").strip().lower(), _DARK_GROUND)
+
+
+def is_light_theme(name: str) -> bool:
+    """True if *name* is a light-terminal palette (dark text on a light ground)."""
+    return ground_for(name) == _LIGHT_GROUND
 
 
 # COLORS is a *live* dict: ansi()/pt_style_dict() read it at call time, so a

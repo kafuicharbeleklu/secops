@@ -1,4 +1,4 @@
-"""Named colour palettes (paprika / ocean / vivid), theme resolution, and runtime
+"""Named colour palettes (paprika / ocean / vivid / reef + a light theme), theme
 set_theme. Each palette's four signal hues stay readable on the terminal ground.
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ class PaletteTests(unittest.TestCase):
         theme.set_theme("paprika")  # restore the default for other tests
 
     def test_three_named_palettes(self):
-        self.assertEqual(set(theme._PALETTES), {"paprika", "ocean", "vivid"})
+        self.assertEqual(set(theme._PALETTES), {"paprika", "ocean", "vivid", "reef", "light"})
 
     def test_all_palettes_share_keys(self):
         keysets = [frozenset(p) for p in theme._PALETTES.values()]
@@ -67,14 +67,40 @@ class PaletteTests(unittest.TestCase):
         self.assertEqual(theme.set_theme("paprika"), "paprika")
         self.assertEqual(theme.COLORS["accent"], "#669bbc")
 
-    def test_signal_colours_readable_on_ground(self):
+    def test_signal_colours_readable_on_their_ground(self):
+        # accent is used in headings/links (text-grade >= 4.5); success/warning are
+        # bold signal glyphs (WCAG non-text 3:1); error is a strong marker (>= 4.0).
         for name, palette in theme._PALETTES.items():
+            ground = theme.ground_for(name)
+            self.assertGreaterEqual(
+                _contrast(palette["accent"], ground), 4.5,
+                f"{name}.accent {palette['accent']} below AA on {ground}",
+            )
+            self.assertGreaterEqual(
+                _contrast(palette["error"], ground), 4.0,
+                f"{name}.error {palette['error']} too low on {ground}",
+            )
+            for role in ("success", "warning"):
+                self.assertGreaterEqual(
+                    _contrast(palette[role], ground), 3.0,
+                    f"{name}.{role} {palette[role]} below 3:1 on {ground}",
+                )
+
+    def test_dark_palettes_keep_all_signals_at_aa(self):
+        # regression guard: the dark palettes hit full 4.5 AA on every signal.
+        for name in ("paprika", "ocean", "vivid", "reef"):
+            palette = theme._PALETTES[name]
             for role in ("accent", "success", "warning"):
                 self.assertGreaterEqual(
-                    _contrast(palette[role]), 4.5, f"{name}.{role} {palette[role]} below AA on ground"
+                    _contrast(palette[role], theme._DARK_GROUND), 4.5,
+                    f"{name}.{role} regressed below AA",
                 )
+
+    def test_body_text_is_high_contrast_on_each_ground(self):
+        for name, palette in theme._PALETTES.items():
             self.assertGreaterEqual(
-                _contrast(palette["error"]), 4.0, f"{name}.error {palette['error']} too low"
+                _contrast(palette["text"], theme.ground_for(name)), 7.0,
+                f"{name}.text must stay AAA-grade body text",
             )
 
     def test_vivid_has_a_true_red_danger(self):
@@ -86,8 +112,8 @@ class ThemeHelperTests(unittest.TestCase):
     def tearDown(self):
         theme.set_theme("paprika")
 
-    def test_available_themes_lists_the_three_palettes(self):
-        self.assertEqual(set(theme.available_themes()), {"paprika", "ocean", "vivid"})
+    def test_available_themes_lists_all_palettes(self):
+        self.assertEqual(set(theme.available_themes()), {"paprika", "ocean", "vivid", "reef", "light"})
 
     def test_is_known_theme(self):
         self.assertTrue(theme.is_known_theme("Ocean"))   # case-insensitive
@@ -176,6 +202,45 @@ class StartupThemeApplicationTests(unittest.TestCase):
     def test_no_saved_theme_leaves_default(self):
         self.assertEqual(self._run(None), "paprika")
         self.handler.refresh_theme.assert_not_called()
+
+
+class LightThemeTests(unittest.TestCase):
+    """The light palette targets a light terminal: dark text, deeper signals."""
+
+    def tearDown(self):
+        theme.set_theme("paprika")
+
+    def test_light_is_flagged_light_dark_palettes_are_not(self):
+        self.assertTrue(theme.is_light_theme("light"))
+        for name in ("paprika", "ocean", "vivid", "reef"):
+            self.assertFalse(theme.is_light_theme(name), name)
+
+    def test_light_ground_is_white_dark_ground_is_dark(self):
+        self.assertEqual(theme.ground_for("light"), theme._LIGHT_GROUND)
+        self.assertEqual(theme.ground_for("reef"), theme._DARK_GROUND)
+        self.assertEqual(theme.ground_for("bogus"), theme._DARK_GROUND)  # safe default
+
+    def test_light_uses_dark_text_dark_uses_light_text(self):
+        self.assertEqual(theme._PALETTES["light"]["text"], "#18181b")   # dark on light
+        self.assertEqual(theme._PALETTES["paprika"]["text"], "#e4e4e7")  # light on dark
+
+    def test_switching_to_light_flips_text_colour_live(self):
+        theme.set_theme("light")
+        self.assertEqual(theme.COLORS["text"], "#18181b")
+        self.assertEqual(theme.COLORS["accent"], "#1a759f")
+        theme.set_theme("paprika")
+        self.assertEqual(theme.COLORS["text"], "#e4e4e7")
+
+
+class ReefThemeTests(unittest.TestCase):
+    def tearDown(self):
+        theme.set_theme("paprika")
+
+    def test_reef_is_a_dark_palette_with_a_true_red_error(self):
+        reef = theme._PALETTES["reef"]
+        self.assertEqual(reef["text"], "#e4e4e7")  # light-on-dark
+        r, g, b = (int(reef["error"].lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        self.assertTrue(r > g and r > b, "reef error should be an unambiguous red")
 
 
 if __name__ == "__main__":

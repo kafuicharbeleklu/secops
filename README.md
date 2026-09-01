@@ -131,7 +131,7 @@ Runtime and UX:
 /fast
 /permissions [allow|ask|deny|clear] <resource>
 /sandbox [on|off|status]
-/theme [paprika|ocean|vivid]
+/theme [paprika|ocean|vivid|reef|light]
 /keybindings
 /auto [on|off]
 ```
