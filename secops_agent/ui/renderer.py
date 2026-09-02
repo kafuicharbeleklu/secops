@@ -192,6 +192,18 @@ from secops_agent.ui.views.panels import (
 
 
 
+def _user_turn_bg() -> str:
+    """A very faint band behind the user's own turn (Claude-Code style).
+
+    A hair lighter than the dark ground / a hair darker than the light ground —
+    just enough to read as "my input" without competing with tool cards. The fg
+    colours (accent / accent_bright) stay well above 4.5:1 on either tint.
+    """
+    from secops_agent.ui.theme import active_theme_name, is_light_theme
+
+    return "#eceef3" if is_light_theme(active_theme_name()) else "#1f1f27"
+
+
 def _tool_output_lines(result: Any) -> list[str]:
     output = str(getattr(result, "output", "") or getattr(result, "error", "") or "(no output)")
     output = supervised_detail_text(getattr(result, "metadata", None), output)
@@ -1038,18 +1050,30 @@ class Renderer:
         )
 
     def render_user_input(self, text: str, *, trailing_blank: bool = True, separator: bool = True):
-        """Echo a completed prompt once after prompt_toolkit erases redraws."""
+        """Echo a completed prompt once after prompt_toolkit erases redraws.
+
+        Claude-Code style: the user's turn sits on a faint full-width band so the
+        eye separates *what I asked* from *what the agent answered* at a glance.
+        """
         lines = str(text).splitlines() or [""]
         input_color = COLORS["accent_bright"]
         width = _surface_width(self.console)
+        bg = _user_turn_bg()
         if separator:
             self.console.print(f"[{COLORS['text_dim']}]{_turn_separator(width)}[/]")
-        self.console.print(
-            f"[{COLORS['accent']}]>[/{COLORS['accent']}] "
-            f"[{input_color} bold]{escape(lines[0])}[/]"
-        )
+
+        def _band(marker: str, body: str) -> None:
+            # A faint tint hugs the text (no full-width padding — trailing spaces
+            # would pollute scrollback / copy-paste in a real terminal).
+            self.console.print(
+                f"[{COLORS['accent']} on {bg}]{marker}[/]"
+                f"[{input_color} bold on {bg}] {escape(body)}[/]",
+                highlight=False,
+            )
+
+        _band(">", lines[0])
         for line in lines[1:]:
-            self.console.print(f"  [{input_color} bold]{escape(line)}[/]")
+            _band(" ", line)
         if trailing_blank:
             self.console.print()
 

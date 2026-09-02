@@ -3172,6 +3172,23 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("#14311f", html)
         self.assertIn("font-weight: bold", html)
 
+    def test_user_turn_sits_on_a_faint_separation_band(self):
+        from secops_agent.ui.renderer import _user_turn_bg
+
+        renderer = Renderer()
+        renderer.console = Console(width=60, record=True, force_terminal=True,
+                                   color_system="truecolor", file=io.StringIO())
+        renderer.render_user_input("scanne 10.10.10.5", trailing_blank=False)
+        html = renderer.console.export_html(inline_styles=True).lower()
+
+        # the prompt marker and the echoed text both carry the faint band bg so the
+        # user's turn reads as one tinted block (Claude-Code separation cue).
+        self.assertIn(_user_turn_bg().lower(), html)
+        # the band never bakes trailing padding into scrollback (clean copy-paste).
+        text = renderer.console.export_text()
+        for line in text.splitlines():
+            self.assertEqual(line, line.rstrip(), "user echo must not pad trailing spaces")
+
     def test_diff_render_non_git_matches_antigravity_warning_shape(self):
         if not shutil.which("git"):
             self.skipTest("git is not installed")
