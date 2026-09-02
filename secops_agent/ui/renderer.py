@@ -708,6 +708,27 @@ def _streaming_tail(text: str, viewport_height: int) -> str:
     return text[cut + 1:]
 
 
+def _reflow_live_shape(live_display: Any, frame: Any, console: "Console") -> int:
+    """Correct a Rich ``Live``'s cached render height after a terminal resize.
+
+    On SIGWINCH the terminal reflows the on-screen live frame to the new width, but
+    Rich's ``LiveRender._shape`` still holds the *pre-resize* height, so its next
+    ``position_cursor()`` rewinds by the wrong number of rows — too few on a shrink
+    (orphan lines stack into the cascade) or too many on a grow (blank rows are left
+    behind). This re-measures *frame* at the console's CURRENT size and writes that
+    height back into ``_shape`` so the rewind matches what is on screen. Returns the
+    corrected height (``0`` if the live render is unavailable). Private-API access is
+    guarded by the caller (Rich has no public setter)."""
+    live_render = getattr(live_display, "_live_render", None)
+    if live_render is None:
+        return 0
+    lines = console.render_lines(frame, pad=False)
+    height = min(len(lines), max(1, int(console.size.height)))
+    shape = getattr(live_render, "_shape", None)
+    live_render._shape = (shape[0] if shape else height, height)
+    return height
+
+
 def _classify_stream_key_chunk(data: bytes) -> str:
     """Classify a raw stdin chunk read while the agent streams.
 
@@ -4111,13 +4132,27 @@ class Renderer:
         def _on_resize() -> None:
             # Debounced SIGWINCH (P2): re-wrap the active live frame at the new
             # terminal width immediately, without waiting for the next streamed
-            # token — so a mid-stream resize (or a stalled stream) never leaves a
-            # stale-width frame on screen. Rebuilt from the accumulator so it
-            # reflows correctly; committed scrollback relies on terminal reflow.
-            if live_display is not None:
-                with contextlib.suppress(Exception):
-                    live_display.update(_build_display(_live_tail(text_accumulator)))
-                    live_display.refresh()
+            # token. Two resize hazards are handled here (see the classic-renderer
+            # reflow limitation — Claude Code hit the same, cf. its fullscreen mode):
+            #   1. a duplicate SIGWINCH at the SAME dimensions is dropped, so an
+            #      already-settled frame is not redrawn (and re-miscounted) again;
+            #   2. the terminal has reflowed the old frame at the new width, but
+            #      Rich's cached shape is pre-resize — _reflow_live_shape re-measures
+            #      it so position_cursor rewinds by the right number of rows instead
+            #      of stacking orphan lines (shrink) or leaving a void (grow).
+            # Committed scrollback still relies on terminal reflow (inherent to the
+            # print-to-scrollback model; only an alternate-screen renderer avoids it).
+            if live_display is None:
+                return
+            with contextlib.suppress(Exception):
+                size = self.console.size
+                if size == self._last_stream_resize_size:
+                    return
+                self._last_stream_resize_size = size
+                frame = _build_display(_live_tail(text_accumulator))
+                live_display.update(frame)
+                _reflow_live_shape(live_display, frame, self.console)
+                live_display.refresh()
 
         def _advance_ctrl_o_tail(lines: int) -> None:
             nonlocal latest_tool_tail_lines
@@ -4268,6 +4303,7 @@ class Renderer:
                 )
                 live_display.start()
 
+        self._last_stream_resize_size = None  # drop duplicate same-dimension SIGWINCH
         resize_debouncer = layout.ResizeDebouncer(_on_resize)
         with contextlib.suppress(Exception):
             resize_debouncer.install(asyncio.get_running_loop())

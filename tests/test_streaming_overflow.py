@@ -49,6 +49,58 @@ class StreamingTailTests(unittest.TestCase):
 
 
 
+class ResizeShapeReflowTests(unittest.TestCase):
+    """After a terminal resize the terminal reflows the on-screen live frame, but
+    Rich's LiveRender._shape keeps the pre-resize height, so its next
+    position_cursor() rewinds by the wrong row count — the shrink cascade / grow
+    void. _reflow_live_shape re-measures the frame at the CURRENT width and corrects
+    the shape height. These lock the correction mechanism (a true PTY reflow is not
+    reproducible in a StringIO console)."""
+
+    def _live_at(self, content, width, height=40):
+        from rich.live import Live
+        from secops_agent.ui.renderer import _agent_markdown
+        console = Console(file=io.StringIO(), force_terminal=True, width=width, height=height)
+        frame = _agent_markdown(content, width=width)
+        live = Live(frame, console=console, auto_refresh=False)
+        list(console.render(live._live_render))  # sets _shape to the width-`width` height
+        return live, console
+
+    def test_shrink_reflow_rewrites_height_to_narrower_width(self):
+        from secops_agent.ui.renderer import _reflow_live_shape, _agent_markdown
+        para = "mot " * 90  # wraps to more rows the narrower it gets
+        live, _ = self._live_at(para, width=100)
+        h_wide = live._live_render._shape[1]
+        narrow = Console(file=io.StringIO(), force_terminal=True, width=40, height=40)
+        corrected = _reflow_live_shape(live, _agent_markdown(para, width=40), narrow)
+        # Height is re-measured at width 40 (taller) and written back — not stuck wide.
+        self.assertEqual(live._live_render._shape[1], corrected)
+        self.assertGreater(corrected, h_wide)
+
+    def test_grow_reflow_rewrites_height_to_wider_width(self):
+        from secops_agent.ui.renderer import _reflow_live_shape, _agent_markdown
+        para = "mot " * 90
+        live, _ = self._live_at(para, width=40)
+        h_narrow = live._live_render._shape[1]
+        wide = Console(file=io.StringIO(), force_terminal=True, width=100, height=40)
+        corrected = _reflow_live_shape(live, _agent_markdown(para, width=100), wide)
+        self.assertEqual(live._live_render._shape[1], corrected)
+        self.assertLess(corrected, h_narrow)
+
+    def test_reflow_caps_height_at_console_height(self):
+        from secops_agent.ui.renderer import _reflow_live_shape, _agent_markdown
+        para = "mot " * 200
+        live, _ = self._live_at(para, width=80)
+        tiny = Console(file=io.StringIO(), force_terminal=True, width=40, height=6)
+        corrected = _reflow_live_shape(live, _agent_markdown(para, width=40), tiny)
+        self.assertLessEqual(corrected, 6)  # never rewinds past the viewport
+
+    def test_reflow_is_safe_without_a_live_render(self):
+        from secops_agent.ui.renderer import _reflow_live_shape
+        console = Console(file=io.StringIO(), force_terminal=True, width=40, height=20)
+        self.assertEqual(_reflow_live_shape(object(), "anything", console), 0)
+
+
 class TrailingWhitespaceTests(unittest.TestCase):
     """#6: the flushed streamed answer must not carry right-side padding spaces
     into scrollback (they survive copy-paste). The Segment-level stripper runs
