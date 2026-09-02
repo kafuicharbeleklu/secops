@@ -22,6 +22,7 @@ from secops_agent.core.experience import (
     _normalize_required_access,
     _risk_band,
     aggregate_suggestion_signals,
+    corroboration_counts,
     evaluate_lesson_match,
     lesson_influence_detail,
     suggestion_learning_detail_for_action,
@@ -932,8 +933,12 @@ class MissionPlanner:
         if not self.lessons:
             return
         before_priority = action.priority
+        corroboration = corroboration_counts(self.lessons)
         decisions = [
-            evaluate_lesson_match(lesson, mission, action, min_score=0.18)
+            evaluate_lesson_match(
+                lesson, mission, action, min_score=0.18,
+                corroboration=corroboration.get(lesson.id, 1),
+            )
             for lesson in self.lessons
         ]
         matches = sorted(

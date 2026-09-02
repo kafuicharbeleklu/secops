@@ -127,6 +127,11 @@ def _utc_now_iso() -> str:
 # behaviour is unchanged.
 _DEFAULT_SIGNAL_HALF_LIFE_DAYS = 10.0
 _DEFAULT_LESSON_HALF_LIFE_DAYS = 45.0
+# Corroboration: repeated independent lessons confirming the same pattern make it
+# more trustworthy, so a lesson corroborated by siblings gets a small, bounded
+# score bonus ("acquire experience"). Ranking only — it never changes review
+# status, prompt inclusion, or authorization; a lone lesson gets no bonus.
+_MAX_CORROBORATION_BONUS = 0.4
 
 
 def _env_float(name: str, default: float) -> float:
@@ -1148,8 +1153,13 @@ def retrieve_similar_lessons(
     limit: int = 5,
     min_score: float = 0.18,
 ) -> list[tuple[CaseLesson, float]]:
+    lessons = list(lessons)
+    counts = corroboration_counts(lessons)
     decisions = [
-        evaluate_lesson_match(lesson, mission, action, min_score=min_score)
+        evaluate_lesson_match(
+            lesson, mission, action, min_score=min_score,
+            corroboration=counts.get(lesson.id, 1),
+        )
         for lesson in lessons
     ]
     scored = [
@@ -1172,6 +1182,7 @@ def evaluate_lesson_match(
     action: Any | None = None,
     *,
     min_score: float = 0.18,
+    corroboration: int = 1,
 ) -> LessonMatchDecision:
     """Evaluate one lesson against the current mission/action using one decision path."""
     reasons: list[str] = []
@@ -1238,6 +1249,8 @@ def evaluate_lesson_match(
                             "SECOPS_LESSON_HALF_LIFE_DAYS", _DEFAULT_LESSON_HALF_LIFE_DAYS
                         ),
                     )
+                # Repeatedly-confirmed pattern → bounded ranking bonus (P1c).
+                raw_score *= _corroboration_multiplier(corroboration)
                 score = round(raw_score, 4)
                 if score < min_score:
                     reasons.append("insufficient compatible evidence overlap")
@@ -1625,6 +1638,38 @@ def _matches_action(lesson: CaseLesson, action: Any | None) -> bool:
     action_args = dict(getattr(action, "arguments", {}) or {})
     lesson_args = lesson.action_arguments
     return bool(action_args and lesson_args and set(action_args.items()) & set(lesson_args.items()))
+
+
+def _corroboration_key(lesson: CaseLesson) -> tuple[str, str, frozenset[str]] | None:
+    """Signature grouping lessons that confirm the same pattern: same action
+    family + outcome + service family. Returns None when there is nothing
+    distinctive to corroborate (no family and no service), so unrelated lessons
+    are never lumped together."""
+    family = (lesson.action_tool_name or lesson.action_method or "").casefold()
+    services = frozenset(_service_families_from_values(lesson.service_fingerprints))
+    if not family and not services:
+        return None
+    return (family, lesson.outcome, services)
+
+
+def corroboration_counts(lessons: Iterable[CaseLesson]) -> dict[str, int]:
+    """Map each lesson id to how many stored lessons (including itself) confirm the
+    same pattern. Used to give repeatedly-confirmed lessons a bounded ranking
+    bonus."""
+    keyed: list[tuple[str, tuple[str, str, frozenset[str]] | None]] = []
+    counts: Counter[tuple[str, str, frozenset[str]]] = Counter()
+    for lesson in lessons:
+        key = _corroboration_key(lesson)
+        keyed.append((lesson.id, key))
+        if key is not None:
+            counts[key] += 1
+    return {lid: (counts[key] if key is not None else 1) for lid, key in keyed}
+
+
+def _corroboration_multiplier(corroboration: int) -> float:
+    if corroboration <= 1:
+        return 1.0
+    return 1.0 + min(_MAX_CORROBORATION_BONUS, 0.1 * (corroboration - 1))
 
 
 def _lesson_identity(lesson: CaseLesson) -> str:

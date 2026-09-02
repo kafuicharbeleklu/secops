@@ -593,6 +593,48 @@ class ExperienceMemoryTests(unittest.TestCase):
         self.assertEqual(old_reviewed, fresh_reviewed)           # curated lesson never decays
         self.assertGreater(old_reviewed, old_unreviewed)         # curated outranks stale auto
 
+    def test_corroborating_lessons_raise_the_score_within_bounds(self):
+        # Repeatedly-confirmed pattern → higher rank, but the bonus is bounded
+        # (+40% max) so a flood of siblings cannot dominate. Ranking only.
+        from secops_agent.core.experience import corroboration_counts
+
+        mission = _web_upload_mission()
+        action = NextAction(
+            title="Assess upload surface at http://10.10.10.5/panel",
+            rationale="Validate the upload panel before generating payloads.",
+            method="upload_surface_validation",
+            risk="high",
+            evidence=["Status 301, Size 313"],
+        )
+        lesson = CaseLesson(
+            title="Similar upload panel led to extension filtering check",
+            outcome="success",
+            action_method="upload_surface_validation",
+            service_fingerprints=["Apache httpd"],
+            endpoint_hints=["/panel"],
+            evidence=["Status 301 panel path"],
+            confidence=0.8,
+            review_status="reviewed",
+        )
+        lone = evaluate_lesson_match(lesson, mission, action, corroboration=1).score
+        confirmed = evaluate_lesson_match(lesson, mission, action, corroboration=3).score
+        capped = evaluate_lesson_match(lesson, mission, action, corroboration=50).score
+
+        self.assertGreater(confirmed, lone)
+        self.assertAlmostEqual(capped, lone * 1.4, places=3)   # bonus is capped at +40%
+
+        siblings = [
+            CaseLesson(
+                title=f"upload finding {i}",
+                outcome="success",
+                action_method="upload_surface_validation",
+                service_fingerprints=["Apache httpd 2.4"],
+            )
+            for i in range(3)
+        ]
+        counts = corroboration_counts(siblings)
+        self.assertEqual(sorted(counts.values()), [3, 3, 3])
+
     def test_success_lesson_boosts_upload_candidate_and_explains_reason(self):
         mission = _web_upload_mission()
         lesson = CaseLesson(
