@@ -298,6 +298,19 @@ class TestConversationMemory:
         trimmed = mem.trim_to_budget(30)  # 30 tokens = ~3 messages
         assert len(trimmed) <= 4
 
+    def test_context_token_budget_default_and_env_override(self):
+        import os
+        from unittest.mock import patch
+        from secops_agent.core.agent import _context_token_budget, _DEFAULT_CONTEXT_TOKEN_BUDGET
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SECOPS_CONTEXT_TOKEN_BUDGET", None)
+            assert _context_token_budget() == _DEFAULT_CONTEXT_TOKEN_BUDGET
+        with patch.dict(os.environ, {"SECOPS_CONTEXT_TOKEN_BUDGET": "5000"}):
+            assert _context_token_budget() == 5000
+        with patch.dict(os.environ, {"SECOPS_CONTEXT_TOKEN_BUDGET": "not-a-number"}):
+            assert _context_token_budget() == _DEFAULT_CONTEXT_TOKEN_BUDGET
+
     def test_clear(self):
         mem = ConversationMemory(max_messages=3)
         for i in range(5):

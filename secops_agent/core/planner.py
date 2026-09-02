@@ -18,7 +18,9 @@ from secops_agent.core.experience import (
     LessonMatchDecision,
     SuggestionSignal,
     _access_satisfies,
+    _action_tokens,
     _mission_access_state,
+    _mission_tokens,
     _normalize_required_access,
     _risk_band,
     aggregate_suggestion_signals,
@@ -904,6 +906,16 @@ class MissionPlanner:
     def _rank(self, actions: list[NextAction], mission: MissionContext) -> list[NextAction]:
         deduped: dict[str, NextAction] = {}
         blocked_tools = self._blocked_tool_names(mission)
+        # Corpus-wide aggregates are invariant across candidate actions, so compute
+        # them ONCE per plan instead of once per action (perf: they were rebuilt for
+        # every action — O(actions × lessons × tokens)).
+        lesson_corroboration = corroboration_counts(self.lessons) if self.lessons else {}
+        lesson_idf_weights = lesson_idf(self.lessons) if self.lessons else {}
+        mission_tokens = _mission_tokens(mission) if self.lessons else set()
+        signal_stats = (
+            aggregate_suggestion_signals(self.suggestion_signals)
+            if self.suggestion_signals else []
+        )
         for action in actions:
             if action.tool_name in blocked_tools and action.method != "missing_tool_install":
                 self._mark_action_audit_rejected(
@@ -918,8 +930,13 @@ class MissionPlanner:
                     "suppressed because the same action failed in this session",
                 )
                 continue
-            self._apply_experience(action, mission)
-            if self._apply_signal_learning(action):
+            self._apply_experience(
+                action, mission,
+                corroboration=lesson_corroboration,
+                idf=lesson_idf_weights,
+                mission_tokens=mission_tokens,
+            )
+            if self._apply_signal_learning(action, stats=signal_stats):
                 self._mark_action_audit_rejected(
                     action,
                     "suppressed by signal learning (repeatedly ignored)",
@@ -930,16 +947,31 @@ class MissionPlanner:
                 deduped[action.key] = action
         return sorted(deduped.values(), key=lambda item: item.priority, reverse=True)[: self.max_actions]
 
-    def _apply_experience(self, action: NextAction, mission: MissionContext) -> None:
+    def _apply_experience(
+        self,
+        action: NextAction,
+        mission: MissionContext,
+        *,
+        corroboration: dict[str, int] | None = None,
+        idf: dict[str, float] | None = None,
+        mission_tokens: set[str] | None = None,
+    ) -> None:
         if not self.lessons:
             return
         before_priority = action.priority
-        corroboration = corroboration_counts(self.lessons)
-        idf = lesson_idf(self.lessons)
+        # Corpus aggregates are computed once per plan by _rank and passed in;
+        # fall back to computing them here for direct callers (e.g. tests).
+        if corroboration is None:
+            corroboration = corroboration_counts(self.lessons)
+        if idf is None:
+            idf = lesson_idf(self.lessons)
+        base_tokens = _mission_tokens(mission) if mission_tokens is None else mission_tokens
+        combined_tokens = base_tokens | _action_tokens(action)
         decisions = [
             evaluate_lesson_match(
                 lesson, mission, action, min_score=0.18,
                 corroboration=corroboration.get(lesson.id, 1), idf=idf,
+                precomputed_tokens=combined_tokens,
             )
             for lesson in self.lessons
         ]
@@ -949,8 +981,9 @@ class MissionPlanner:
             reverse=True,
         )[:3]
         selected_ids = {decision.lesson.id for decision in matches}
-        for lesson in self.lessons:
-            decision = next(item for item in decisions if item.lesson.id == lesson.id)
+        # decisions is built in lockstep with self.lessons, so zip instead of the
+        # previous O(lessons^2) next()-scan over decisions per lesson.
+        for lesson, decision in zip(self.lessons, decisions):
             self._learning_audit.append(
                 self._lesson_audit_entry(
                     action,
@@ -979,15 +1012,24 @@ class MissionPlanner:
                 action.experience.append(note)
         self._set_action_audit_priority_delta(action, action.priority - before_priority)
 
-    def _apply_signal_learning(self, action: NextAction) -> bool:
+    def _apply_signal_learning(
+        self,
+        action: NextAction,
+        *,
+        stats: list | None = None,
+    ) -> bool:
         """Apply signal-based learning adjustments.
 
         Returns True if the action should be **suppressed** (hidden from the
-        user) because it has been repeatedly ignored.
+        user) because it has been repeatedly ignored. ``stats`` is the
+        once-per-plan aggregation passed by _rank; None re-aggregates (direct
+        callers / tests).
         """
         if not self.suggestion_signals:
             return False
-        detail = suggestion_learning_detail_for_action(self.suggestion_signals, action)
+        detail = suggestion_learning_detail_for_action(
+            self.suggestion_signals, action, stats=stats,
+        )
         if not detail:
             return False
         delta = int(detail.get("priority_delta") or 0)

@@ -10,6 +10,7 @@ import uuid
 import asyncio
 import datetime
 import logging
+import os
 import platform
 import re
 import shlex
@@ -260,6 +261,21 @@ AgentEvent = Union[
 # questions and greetings never reach here (they suppress follow-ups).
 _CHAINING_INTENTS = frozenset({UserIntent.UNKNOWN, UserIntent.APPROVED_BATCH})
 
+# Token budget for the conversation window re-sent to the model on EVERY LLM call
+# (the mission loop makes up to max_iterations calls per turn). Distilled facts
+# live in the KB summary carried in the system prompt, so bounding the raw window
+# caps cost without dropping structured knowledge. Override: SECOPS_CONTEXT_TOKEN_BUDGET.
+_DEFAULT_CONTEXT_TOKEN_BUDGET = 12_000
+
+
+def _context_token_budget() -> int:
+    raw = os.environ.get("SECOPS_CONTEXT_TOKEN_BUDGET", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    return value if value > 0 else _DEFAULT_CONTEXT_TOKEN_BUDGET
+
 # RC-α: the generic parser collapses long output to "<lead>  (+N more line(s))"
 # (core/result_parsers/system.py). That trailer is a display hint for the Ctrl+O
 # collapsed view — it must never surface in the user-facing answer channel.
@@ -498,7 +514,10 @@ class SecOpsAgent:
         tools_schema: list[dict[str, Any]],
         turn_id: str,
     ) -> AsyncIterator[StreamChunk | StatusEvent | ErrorEvent]:
-        messages = self.memory.get_messages()
+        # Re-sent on every LLM call in the loop → cap it to a token budget so a
+        # long mission's raw history doesn't multiply cost. Structured facts are
+        # preserved separately in the KB summary within the system prompt.
+        messages = self.memory.trim_to_budget(_context_token_budget())
         for attempt in range(1, self.llm_max_attempts + 1):
             should_retry = False
             self._trace(

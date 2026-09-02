@@ -732,14 +732,20 @@ def aggregate_suggestion_signals(
 def suggestion_learning_detail_for_action(
     signals: Iterable[SuggestionSignal],
     action: Any,
+    *,
+    stats: Iterable[SuggestionLearningStats] | None = None,
 ) -> dict[str, Any] | None:
-    """Return compact signal-learning context for a planner action."""
+    """Return compact signal-learning context for a planner action.
+
+    ``stats`` lets a caller pass the already-aggregated stats (computed once per
+    plan) instead of re-aggregating all signals for every action."""
     key = _action_family_key(action)
     if not key:
         return None
+    all_stats = stats if stats is not None else aggregate_suggestion_signals(signals)
     matching = [
         stat
-        for stat in aggregate_suggestion_signals(signals)
+        for stat in all_stats
         if stat.key == key
     ]
     if not matching:
@@ -1157,10 +1163,14 @@ def retrieve_similar_lessons(
     lessons = list(lessons)
     counts = corroboration_counts(lessons)
     idf = lesson_idf(lessons)
+    tokens = _mission_tokens(mission)
+    if action is not None:
+        tokens = tokens | _action_tokens(action)
     decisions = [
         evaluate_lesson_match(
             lesson, mission, action, min_score=min_score,
             corroboration=counts.get(lesson.id, 1), idf=idf,
+            precomputed_tokens=tokens,
         )
         for lesson in lessons
     ]
@@ -1186,6 +1196,7 @@ def evaluate_lesson_match(
     min_score: float = 0.18,
     corroboration: int = 1,
     idf: dict[str, float] | None = None,
+    precomputed_tokens: set[str] | None = None,
 ) -> LessonMatchDecision:
     """Evaluate one lesson against the current mission/action using one decision path."""
     reasons: list[str] = []
@@ -1226,9 +1237,14 @@ def evaluate_lesson_match(
     passed_gates = not reasons
     score: float | None = None
     if passed_gates:
-        current = _mission_tokens(mission)
-        if action is not None:
-            current |= _action_tokens(action)
+        # mission+action tokens are identical across every lesson in a scoring
+        # pass, so a caller can compute them once and pass them in.
+        if precomputed_tokens is not None:
+            current = precomputed_tokens
+        else:
+            current = _mission_tokens(mission)
+            if action is not None:
+                current |= _action_tokens(action)
         lesson_tokens = lesson.fingerprint_tokens()
         if not lesson_tokens:
             reasons.append("lesson has no reusable fingerprint tokens")

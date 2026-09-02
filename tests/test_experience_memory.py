@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from rich.console import Console
 
@@ -1415,6 +1416,43 @@ class UnreviewedLessonBriefingTests(unittest.TestCase):
         agent = self._agent_with_scored([(unreviewed, 0.99)])
 
         self.assertEqual(agent._relevant_lessons_briefing(mission=object()), "")
+
+
+class PlannerAggregatePerfTests(unittest.TestCase):
+    """Corpus-wide aggregates must be computed ONCE per plan, not once per
+    candidate action (regression guard for the per-action recompute hot path)."""
+
+    def test_corpus_aggregates_computed_once_per_plan(self):
+        import secops_agent.core.planner as planner_mod
+
+        mission = _http_service_mission()
+        lessons = [
+            CaseLesson(
+                title=f"dir_brute finding {i}",
+                outcome="success",
+                action_tool_name="dir_brute",
+                service_fingerprints=["http apache"],
+                review_status="reviewed",
+            )
+            for i in range(4)
+        ]
+        signals = [
+            SuggestionSignal(outcome="succeeded", action_key="dir", tool_name="dir_brute")
+            for _ in range(3)
+        ]
+        planner = MissionPlanner(max_actions=10, lessons=lessons, suggestion_signals=signals)
+
+        with patch.object(planner_mod, "lesson_idf", wraps=planner_mod.lesson_idf) as m_idf, \
+             patch.object(planner_mod, "corroboration_counts", wraps=planner_mod.corroboration_counts) as m_corr, \
+             patch.object(planner_mod, "_mission_tokens", wraps=planner_mod._mission_tokens) as m_tok, \
+             patch.object(planner_mod, "aggregate_suggestion_signals", wraps=planner_mod.aggregate_suggestion_signals) as m_agg:
+            actions = planner.plan(mission)
+
+        self.assertGreater(len(actions), 1)   # several candidate actions were ranked
+        self.assertEqual(m_idf.call_count, 1)
+        self.assertEqual(m_corr.call_count, 1)
+        self.assertEqual(m_tok.call_count, 1)
+        self.assertEqual(m_agg.call_count, 1)
 
 
 class ExperienceStatsBriefingTests(unittest.TestCase):
