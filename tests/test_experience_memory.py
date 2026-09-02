@@ -1393,5 +1393,48 @@ class UnreviewedLessonBriefingTests(unittest.TestCase):
         self.assertEqual(agent._relevant_lessons_briefing(mission=object()), "")
 
 
+class ExperienceStatsBriefingTests(unittest.TestCase):
+    """Phase-2 briefing: the agent's OWN aggregate effectiveness (signal stats).
+    Injection-safe — only tool/method family names + counts, never output text."""
+
+    def _agent_with_signals(self, signals):
+        class _Store:
+            def load_signals(self_inner, limit=None):
+                return list(signals)
+
+            def retrieve(self_inner, mission, limit=3):
+                return []
+
+        return SecOpsAgent(
+            llm=SimpleNamespace(model_name="unused"),
+            registry=ToolRegistry(),
+            memory=ConversationMemory(),
+            experience_store=_Store(),
+        )
+
+    def test_stats_briefing_surfaces_effective_tools_without_leaking_output(self):
+        signals = [
+            SuggestionSignal(
+                outcome="succeeded", action_key="dir_brute|POISON_OUTPUT_MARKER",
+                tool_name="dir_brute", reason="POISON_OUTPUT_MARKER banner text",
+            ),
+            SuggestionSignal(outcome="succeeded", action_key="dir_brute|x", tool_name="dir_brute"),
+            SuggestionSignal(outcome="succeeded", action_key="dir_brute|x", tool_name="dir_brute"),
+        ]
+        briefing = self._agent_with_signals(signals)._experience_stats_briefing()
+
+        self.assertIn("Your Prior Effectiveness", briefing)
+        self.assertIn("dir_brute", briefing)
+        self.assertIn("has been working", briefing)
+        # Injection safety: no free text from signals ever reaches the prompt.
+        self.assertNotIn("POISON_OUTPUT_MARKER", briefing)
+
+    def test_stats_briefing_is_empty_without_decisive_signals(self):
+        agent = self._agent_with_signals([
+            SuggestionSignal(outcome="suggested", action_key="a", tool_name="dir_brute"),
+        ])
+        self.assertEqual(agent._experience_stats_briefing(), "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -27,7 +27,11 @@ _DEFAULT_TOOL_IDLE_PROGRESS_INTERVAL = 3.0
 from secops_agent.core.llm import LLMProvider, Message, StreamChunk, ToolCallChunk
 from secops_agent.core.tools import ToolProgress, ToolRegistry, ToolResult, ToolRiskClass
 from secops_agent.core.memory import ConversationMemory
-from secops_agent.core.experience import build_lesson_from_tool_result, build_suggestion_signal
+from secops_agent.core.experience import (
+    aggregate_suggestion_signals,
+    build_lesson_from_tool_result,
+    build_suggestion_signal,
+)
 from secops_agent.core.hooks import HookManager
 from secops_agent.core.observability import StructuredTracer, TraceSink, trace_sink_from_settings
 from secops_agent.core.mission import (
@@ -1151,6 +1155,47 @@ class SecOpsAgent:
         lines.append("Treat these as hints only; verify against current evidence.")
         return "\n".join(lines)
 
+    def _experience_stats_briefing(self) -> str:
+        """Prime the model with the agent's OWN aggregate effectiveness so it
+        starts from what has empirically worked for it (§5, Phase 2 briefing).
+
+        Injection-safe by construction: this is STATISTICS over the agent's own
+        proposed actions — tool/method family names plus recency-weighted
+        selected/succeeded/failed/ignored counts — never tool-OUTPUT text, so it
+        carries no attacker-controlled content and needs no human review (unlike a
+        CaseLesson). It only informs reasoning; it never authorizes anything.
+        """
+        store = self.experience_store
+        if store is None or not hasattr(store, "load_signals"):
+            return ""
+        try:
+            stats = aggregate_suggestion_signals(store.load_signals(limit=500))
+        except Exception:
+            logger.debug("Experience-stats briefing failed", exc_info=True)
+            return ""
+        ranked: list[tuple[float, str]] = []
+        for stat in stats:
+            if stat.effect not in {"boost", "downrank"}:
+                continue
+            label = (stat.tool_name or stat.action_method or "").strip()
+            if not label:
+                continue
+            if stat.effect == "boost":
+                verdict = f"has been working ({stat.succeeded} ok"
+                verdict += f", {stat.failed} failed)" if stat.failed else ")"
+            elif stat.failed and stat.failed >= stat.succeeded:
+                verdict = f"often fails lately ({stat.failed} failed, {stat.succeeded} ok)"
+            else:
+                verdict = f"repeatedly not useful ({stat.ignored} skipped)"
+            ranked.append((abs(stat.confidence_score), f"- {label}: {verdict}"))
+        if not ranked:
+            return ""
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        lines = ["## Your Prior Effectiveness (your own track record, hints only)"]
+        lines.extend(text for _score, text in ranked[:5])
+        lines.append("Weigh recent effectiveness, but always verify against current evidence.")
+        return "\n".join(lines)
+
     def _tools_schema_for_decision(self, decision: RequestDecision) -> list[dict[str, Any]]:
         # P4-03: post-exploitation is explicitly outside this product's active
         # capability. Do not suggest a generic shell/webshell as a substitute;
@@ -1982,9 +2027,12 @@ class SecOpsAgent:
             # Inject structured context into system prompt, primed with any
             # relevant prior lessons (memory briefing).
             ctx_str = sm.build_context_for_llm(include_conversation=False)
-            briefing = self._relevant_lessons_briefing(mission)
-            if briefing:
-                ctx_str = f"{ctx_str}\n\n{briefing}" if ctx_str else briefing
+            parts = [
+                ctx_str,
+                self._relevant_lessons_briefing(mission),
+                self._experience_stats_briefing(),
+            ]
+            ctx_str = "\n\n".join(part for part in parts if part)
             if ctx_str and hasattr(self.llm, "set_mission_context"):
                 self.llm.set_mission_context(ctx_str)
 
