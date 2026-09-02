@@ -360,7 +360,7 @@ class ToolExecutionSpinner:
             phase_str = ""
 
         # Lead with the tool name so the spinner is a self-sufficient running
-        # indicator (the static ● row is suppressed in a TTY to avoid a
+        # indicator (the static ⏺ row is suppressed in a TTY to avoid a
         # redundant double indicator).
         status_base = f"{self.display_name} · {label}{time_str}{phase_str}"
         status = format_wait_message(status_base, elapsed, include_tip=True)

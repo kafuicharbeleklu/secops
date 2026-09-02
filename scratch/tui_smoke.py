@@ -1350,7 +1350,7 @@ ToolResultBox.render(console, "run_shell", ToolResult(True, "/home/administrator
     text = clean_text(raw)
     ok = (
         process.returncode == 0
-        and "● Bash(pwd) (ctrl+o to expand)" in text
+        and "⏺ Bash(pwd) (ctrl+o to expand)" in text
         and "⎿  /home/administrator/secops_v2" in text
         and "⚠" not in text
     )
@@ -1392,8 +1392,8 @@ tty_runtime.add_artifact(
     source="run_shell",
 )
 
-tty_runtime.ctrl_o_transcript_collapsed = "● Bash(pwd) (ctrl+o to expand)\\n  ⎿  2 lines (ctrl+o to expand)"
-tty_runtime.ctrl_o_transcript_expanded = "● Bash(pwd)\\n  ⎿  /home/administrator/secops_v2 (ctrl+o to collapse)\\n\\n  Output:\\n    /home/administrator/secops_v2\\n    [Exit Code: 0]"
+tty_runtime.ctrl_o_transcript_collapsed = "⏺ Bash(pwd) (ctrl+o to expand)\\n  ⎿  2 lines (ctrl+o to expand)"
+tty_runtime.ctrl_o_transcript_expanded = "⏺ Bash(pwd)\\n  ⎿  /home/administrator/secops_v2 (ctrl+o to collapse)\\n\\n  Output:\\n    /home/administrator/secops_v2\\n    [Exit Code: 0]"
 tty_runtime.ctrl_o_transcript_rendered_lines = 2
 tty_result = _show_ctrl_o_surface(ConversationMemory(), tty_runtime, console)
 print(f"TTY_CTRL_O_RESULT={tty_result}")
@@ -1787,7 +1787,7 @@ asyncio.run(main())
                     break
                 raw_chunks.append(data)
                 text = clean_text(b"".join(raw_chunks))
-                if "● Bash(pwd) (ctrl+o to expand)" in text and "Running" in text:
+                if "⏺ Bash(pwd) (ctrl+o to expand)" in text and "Running" in text:
                     break
 
         if process.poll() is None:
@@ -1806,7 +1806,7 @@ asyncio.run(main())
     raw = b"".join(raw_chunks)
     text = clean_text(raw)
     ok = (
-        "● Bash(pwd) (ctrl+o to expand)" in text
+        "⏺ Bash(pwd) (ctrl+o to expand)" in text
         and "○ Bash(pwd)" not in text
         and "Running" in text
         and "Running Bash" not in text
@@ -1877,7 +1877,7 @@ asyncio.run(main())
                     break
                 raw_chunks.append(data)
                 text = clean_text(b"".join(raw_chunks))
-                if not sent_ctrl_o and "● Bash(pwd) (ctrl+o to expand)" in text and "Running" in text:
+                if not sent_ctrl_o and "⏺ Bash(pwd) (ctrl+o to expand)" in text and "Running" in text:
                     os.write(master_fd, b"\x0f")
                     sent_ctrl_o = True
             if process.poll() is not None:
@@ -1902,14 +1902,14 @@ asyncio.run(main())
     ok = (
         sent_ctrl_o
         and process.returncode == 0
-        and "● Bash(pwd) (ctrl+o to collapse)" in text
-        and "● Bash(pwd) (ctrl+o to expand)" in text
+        and "⏺ Bash(pwd) (ctrl+o to collapse)" in text
+        and "⏺ Bash(pwd) (ctrl+o to expand)" in text
         and "○ Bash(pwd)" not in text
         and "⎿  Running" not in text
         and "⎿  /home/administrator/secops_v2 (ctrl+o to collapse)" in text
         and "· 2 lines" not in text
         and "[Exit Code: 0]" in text
-        and "● Bash(pwd)" in screen_text
+        and "⏺ Bash(pwd)" in screen_text
         and "⎿  /home/administrator/secops_v2 (ctrl+o to collapse)" in screen_text
         and "○ Bash(pwd)" not in screen_text
         and "Running" not in screen_text

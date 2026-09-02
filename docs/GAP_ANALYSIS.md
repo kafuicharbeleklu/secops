@@ -36,8 +36,8 @@ tels. Ils restent listés car la référence normative est désormais `DESIGN_SP
 
 | # | Token | Réf. | Actuel | Impact |
 |---|-------|------|--------|--------|
-| G1 | `glyph.turn_bullet` | `⏺` U+23FA | `●` U+25CF | P1 |
-| G2 | `indent.narrative` / `glyph.turn_bullet` sur la prose | prose sous une puce `⏺`, col 2 | prose indentée 2 sp **sans** puce | P1 |
+| G1 | `glyph.turn_bullet` | `⏺` U+23FA | `⏺` U+23FA — ✅ **résolu** | ~~P1~~ |
+| G2 | `indent.narrative` / `glyph.turn_bullet` sur la prose | prose sous une puce `⏺`, col 2 | prose sous puce `⏺`, col 2 — ✅ **résolu** | ~~P1~~ |
 | G3 | `glyph.thinking` | `✻` U+273B | `▸` U+25B8 | P3 |
 | G4 | `line.tool_call.name_style` | `bold` + `color.text` | `bold` + `accent_bright` | P2 |
 | G5 | `fold.meta_separator` cohérence | ` · ` partout | mélange ` · ` et 2ᵉ ligne méta autonome | P3 |
@@ -49,14 +49,22 @@ tels. Ils restent listés car la référence normative est désormais `DESIGN_SP
 | G11 | `md.table.style` | filets `text_dim` + en-tête `bold` | non implémenté (rendu Rich par défaut) | P3 |
 | G12 | `md.code.inline` | `accent` bright, **non-gras** | `bold accent_bright` (gras appliqué) | P3 |
 
-Écarts retenus : **G1, G2, G3, G4, G5, G7, G8, G11, G12**. (G6, G9, G10 vérifiés
-conformes, listés pour traçabilité.)
+Écarts ouverts : **G3, G4, G5, G7, G8, G11, G12**. Les deux écarts P1 — **G1**
+et **G2** — sont **résolus** le 2026-09-02 (voir les notes de résolution dans le
+détail ci-dessous). (G6, G9, G10 vérifiés conformes, listés pour traçabilité.)
 
 ---
 
 ## Détail des écarts
 
-### G1 — Glyphe de puce : `●` au lieu de `⏺` (P1)
+### G1 — Glyphe de puce : `●` au lieu de `⏺` (P1) — ✅ résolu 2026-09-02
+
+> **Résolu.** `●` (U+25CF) → `⏺` (U+23FA) aux sept sites de rendu
+> (`tool_display.py:360/803/826`, `renderer.py:315/322/326/3704`) ; commentaires
+> et exemples de docstring alignés dans les trois fichiers de charpente. Le mapping
+> état→couleur §4.2 est intact. Les trois `●` non-puce-de-tour (dot VPN `theme.py`,
+> swatch `overlay.py`, statut d'artefact `input_handler.py`) sont volontairement
+> **inchangés**. Régression gardée par `test_tool_call_row_uses_record_bullet`.
 
 - **Token :** `glyph.turn_bullet` — réf. `⏺` (U+23FA).
 - **Actuel :** `●` (U+25CF), codé en dur. **0** occurrence de `⏺` dans `secops_agent/ui/`.
@@ -76,7 +84,17 @@ conformes, listés pour traçabilité.)
   rendu `:783`), `:803`, `:826` ; `renderer.py:315, :322, :326, :3704`. Le mapping
   état→couleur §4.2 est déjà correct et n'est pas touché.
 
-### G2 — La prose de l'assistant n'a pas de puce de tête (P1)
+### G2 — La prose de l'assistant n'a pas de puce de tête (P1) — ✅ résolu 2026-09-02
+
+> **Résolu.** `_agent_markdown()` (`renderer.py`) accepte désormais `bullet=bool` :
+> quand il est armé, la prose est montée dans un `Table.grid` à deux colonnes dont
+> la gouttière porte une **unique** puce `⏺` (`color.accent`) montée en tête, col 0,
+> la première ligne physique seulement — le reste (et chaque ligne de continuation)
+> reste col 2 (`line.hang_alignment`). Il est armé pour le tour **committé/rejoué**
+> (`_flush_live_text`, chemin de replay) et **jamais** pour la queue de streaming
+> (dont la 1ʳᵉ ligne visible n'est plus le début du tour une fois tronquée). Parité
+> de comptage de lignes préservée (l'ancre ctrl+o est inchangée). Régression gardée
+> par `test_agent_stream_renders_thought_and_indented_text`.
 
 - **Token :** `glyph.turn_bullet` sur la prose + `indent.narrative`.
 - **Réf. :** un segment de prose assistant s'ouvre sur `⏺` (col 0), contenu col 2.
@@ -222,7 +240,7 @@ conformes, listés pour traçabilité.)
 
 ## Ordre de correction suggéré (par impact)
 
-1. **G1** (`●`→`⏺`) et **G2** (puce de prose) — P1, restaurent la charpente.
+1. ✅ **G1** (`●`→`⏺`) et **G2** (puce de prose) — P1, **faits** le 2026-09-02.
 2. **G4** (nom d'outil en `text`) et **G8** (args en `text_muted`) — P2/P3,
    remettent la couleur au rang de signal.
 3. **G5** (fusion ligne méta), **G3** (glyphe `✻`), **G11** (style de tableau) et

@@ -1270,7 +1270,7 @@ class TUIPolishTests(unittest.TestCase):
 
         self.assertIn("> bonjour", output)
         self.assertIn("Bonjour, je reprends la session.", output)
-        self.assertIn("● Bash(date)", output)
+        self.assertIn("⏺ Bash(date)", output)
         self.assertIn("Sun Jun", output)
         self.assertNotIn("TOOL DATA", output)
         self.assertNotIn("internal model-only context", output)
@@ -1647,7 +1647,7 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("line two", output)
         self.assertIn("[Exit Code: 0]", output)
         self.assertNotIn("Trajectory", output)
-        self.assertNotIn("● Bash(pwd)", output)
+        self.assertNotIn("⏺ Bash(pwd)", output)
 
     def test_ctrl_o_expands_truncated_tool_output_from_spool_metadata(self):
         runtime = RuntimeState()
@@ -1689,7 +1689,7 @@ class TUIPolishTests(unittest.TestCase):
         self.assertEqual(_show_ctrl_o_surface(None, runtime, second_console), "tool-output-collapsed")
         output = second_console.export_text()
 
-        self.assertNotIn("● Bash(pwd)", output)
+        self.assertNotIn("⏺ Bash(pwd)", output)
         self.assertNotIn("ctrl+o to collapse", output)
         self.assertEqual(runtime.ctrl_o_expanded_artifact_id, "")
         self.assertEqual(runtime.ctrl_o_rendered_lines, 0)
@@ -1712,8 +1712,8 @@ class TUIPolishTests(unittest.TestCase):
         runtime = RuntimeState()
         runtime.add_artifact("Bash(pwd) result", "tool-result", "line one\nline two", source="run_shell")
         runtime.set_ctrl_o_anchor(
-            ["● Bash(pwd) (ctrl+o to expand)", "  ⎿  2 lines (ctrl+o to expand)"],
-            ["● Bash(pwd)", "  ⎿  line one (ctrl+o to collapse)", "", "  Output:", "    line one", "    line two"],
+            ["⏺ Bash(pwd) (ctrl+o to expand)", "  ⎿  2 lines (ctrl+o to expand)"],
+            ["⏺ Bash(pwd)", "  ⎿  line one (ctrl+o to collapse)", "", "  Output:", "    line one", "    line two"],
         )
         memory = ConversationMemory()
         stream = io.StringIO()
@@ -1730,8 +1730,8 @@ class TUIPolishTests(unittest.TestCase):
     def test_ctrl_o_tty_with_anchor_rewrites_previous_tool_block_in_place(self):
         runtime = RuntimeState()
         runtime.set_ctrl_o_anchor(
-            ["● Bash(ip addr show) (ctrl+o to expand)", "  ⎿  21 lines (ctrl+o to expand)"],
-            ["● Bash(ip addr show)", "  ⎿  1: lo (ctrl+o to collapse)", "", "  Output:", "    1: lo", "    5: tun0"],
+            ["⏺ Bash(ip addr show) (ctrl+o to expand)", "  ⎿  21 lines (ctrl+o to expand)"],
+            ["⏺ Bash(ip addr show)", "  ⎿  1: lo (ctrl+o to collapse)", "", "  Output:", "    1: lo", "    5: tun0"],
         )
         runtime.advance_ctrl_o_anchor_lines(8)
         memory = ConversationMemory()
@@ -1753,8 +1753,8 @@ class TUIPolishTests(unittest.TestCase):
     def test_ctrl_o_tty_rewrites_anchor_at_top_visible_line(self):
         runtime = RuntimeState()
         runtime.set_ctrl_o_anchor(
-            ["● Bash(ip addr show) (ctrl+o to expand)", "  ⎿  21 lines (ctrl+o to expand)"],
-            ["● Bash(ip addr show)", "  ⎿  1: lo (ctrl+o to collapse)", "", "  Output:", "    1: lo", "    5: tun0"],
+            ["⏺ Bash(ip addr show) (ctrl+o to expand)", "  ⎿  21 lines (ctrl+o to expand)"],
+            ["⏺ Bash(ip addr show)", "  ⎿  1: lo (ctrl+o to collapse)", "", "  Output:", "    1: lo", "    5: tun0"],
         )
         runtime.advance_ctrl_o_anchor_lines(4)
         memory = ConversationMemory()
@@ -1789,8 +1789,8 @@ class TUIPolishTests(unittest.TestCase):
         # The expansion is now capped to stay reachable, so collapse always works.
         runtime = RuntimeState()
         runtime.set_ctrl_o_anchor(
-            ["● Bash(sysinfo) (ctrl+o to expand)", "  ⎿  40 lines (ctrl+o to expand)"],
-            ["● Bash(sysinfo)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:"]
+            ["⏺ Bash(sysinfo) (ctrl+o to expand)", "  ⎿  40 lines (ctrl+o to expand)"],
+            ["⏺ Bash(sysinfo)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:"]
             + [f"    line {i}" for i in range(24)],
         )
         runtime.advance_ctrl_o_anchor_lines(2)  # small tail (just the prompt)
@@ -1816,13 +1816,13 @@ class TUIPolishTests(unittest.TestCase):
         # screen-filling expansion is anchored so close to the bottom that the
         # in-place rewrite's print overflows. The block then lands higher than
         # the cursor bookkeeping assumes, the next collapse's delete misses its
-        # top, and every toggle leaves another stacked "● Sysinfo(all)" copy in
+        # top, and every toggle leaves another stacked "⏺ Sysinfo(all)" copy in
         # the scrollback. Such an expansion is now refused and routed to
         # /trajectory, so repeated toggles can never stack.
         runtime = RuntimeState()
         runtime.set_ctrl_o_anchor(
-            ["● Sysinfo(all) (ctrl+o to expand)", "  ⎿  Hostname: ubuntu +43 lines"],
-            ["● Sysinfo(all)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:"]
+            ["⏺ Sysinfo(all) (ctrl+o to expand)", "  ⎿  Hostname: ubuntu +43 lines"],
+            ["⏺ Sysinfo(all)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:"]
             + [f"    line {i}" for i in range(42)],
             tail_lines=1,
         )
@@ -1855,8 +1855,8 @@ class TUIPolishTests(unittest.TestCase):
         # so the delete/insert arithmetic stays aligned and they must still open.
         runtime = RuntimeState()
         runtime.set_ctrl_o_anchor(
-            ["● Sysinfo(all) (ctrl+o to expand)", "  ⎿  Hostname: ubuntu +43 lines"],
-            ["● Sysinfo(all)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:"]
+            ["⏺ Sysinfo(all) (ctrl+o to expand)", "  ⎿  Hostname: ubuntu +43 lines"],
+            ["⏺ Sysinfo(all)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:"]
             + [f"    line {i}" for i in range(42)],
             tail_lines=3,
         )
@@ -1883,8 +1883,8 @@ class TUIPolishTests(unittest.TestCase):
         # the same roomy terminal still toggles in place.
         runtime = RuntimeState()
         runtime.set_ctrl_o_anchor(
-            ["● Sysinfo(all) (ctrl+o to expand)", "  ⎿  Hostname: ubuntu +5 lines"],
-            ["● Sysinfo(all)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:",
+            ["⏺ Sysinfo(all) (ctrl+o to expand)", "  ⎿  Hostname: ubuntu +5 lines"],
+            ["⏺ Sysinfo(all)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:",
              "    one", "    two"],
             tail_lines=2,
         )
@@ -1906,11 +1906,11 @@ class TUIPolishTests(unittest.TestCase):
     def test_ctrl_o_collapse_stays_silent_when_expanded_anchor_is_too_tall(self):
         runtime = RuntimeState()
         collapsed_lines = [
-            "● ConnectVpnConfig(/home/administrator/Downloads/lab.ovpn) (ctrl+o to expand)",
+            "⏺ ConnectVpnConfig(/home/administrator/Downloads/lab.ovpn) (ctrl+o to expand)",
             "  ⎿  1m 3.8s · 27 lines · 1,731 chars (ctrl+o to expand)",
         ]
         expanded_lines = [
-            "● ConnectVpnConfig(/home/administrator/Downloads/lab.ovpn)",
+            "⏺ ConnectVpnConfig(/home/administrator/Downloads/lab.ovpn)",
             "  ⎿  VPN failed: /home/administrator/Downloads/lab.ovpn (ctrl+o to collapse)",
             "",
             "  Output:",
@@ -1944,11 +1944,11 @@ class TUIPolishTests(unittest.TestCase):
         runtime = RuntimeState()
         runtime.add_artifact("Bash(pwd) result", "tool-result", "line one\nline two", source="run_shell")
         runtime.ctrl_o_transcript_collapsed = (
-            "● Bash(pwd) (ctrl+o to expand)\n"
+            "⏺ Bash(pwd) (ctrl+o to expand)\n"
             "  ⎿  2 lines (ctrl+o to expand)"
         )
         runtime.ctrl_o_transcript_expanded = (
-            "● Bash(pwd)\n"
+            "⏺ Bash(pwd)\n"
             "  ⎿  line one (ctrl+o to collapse)\n"
             "\n"
             "  Output:\n"
@@ -1981,11 +1981,11 @@ class TUIPolishTests(unittest.TestCase):
             source="run_shell",
         )
         runtime.ctrl_o_transcript_collapsed = (
-            "● Bash(pwd) (ctrl+o to expand)\n"
+            "⏺ Bash(pwd) (ctrl+o to expand)\n"
             "  ⎿  2 lines (ctrl+o to expand)"
         )
         runtime.ctrl_o_transcript_expanded = (
-            "● Bash(pwd)\n"
+            "⏺ Bash(pwd)\n"
             "  ⎿  /home/administrator/secops_v2 (ctrl+o to collapse)\n"
             "\n"
             "  Output:\n"
@@ -2000,7 +2000,7 @@ class TUIPolishTests(unittest.TestCase):
         result = _show_ctrl_o_surface(memory, runtime, console)
 
         self.assertEqual(result, "transcript")
-        self.assertIn("● Bash(pwd)", stream.getvalue())
+        self.assertIn("⏺ Bash(pwd)", stream.getvalue())
         self.assertIn("ctrl+o to collapse", stream.getvalue())
         self.assertTrue(runtime.ctrl_o_transcript_is_expanded)
         self.assertEqual(runtime.ctrl_o_transcript_rendered_lines, 6)
@@ -2008,8 +2008,8 @@ class TUIPolishTests(unittest.TestCase):
     def test_ctrl_o_prompt_tail_is_applied_once_before_anchor_toggle(self):
         runtime = RuntimeState()
         runtime.set_ctrl_o_anchor(
-            ["● Bash(ip addr show) (ctrl+o to expand)", "  ⎿  21 lines (ctrl+o to expand)"],
-            ["● Bash(ip addr show)", "  ⎿  1: lo (ctrl+o to collapse)", "", "  Output:", "    1: lo", "    5: tun0"],
+            ["⏺ Bash(ip addr show) (ctrl+o to expand)", "  ⎿  21 lines (ctrl+o to expand)"],
+            ["⏺ Bash(ip addr show)", "  ⎿  1: lo (ctrl+o to collapse)", "", "  Output:", "    1: lo", "    5: tun0"],
         )
         memory = ConversationMemory()
         stream = io.StringIO()
@@ -2081,7 +2081,7 @@ class TUIPolishTests(unittest.TestCase):
         self.assertTrue(renderer._render_latest_transcript_expansion())
         output = renderer.console.export_text()
 
-        self.assertIn("● Bash(pwd)", output)
+        self.assertIn("⏺ Bash(pwd)", output)
         self.assertIn("ctrl+o to collapse", output)
         self.assertNotIn("⎿  Running", output)
 
@@ -2096,7 +2096,7 @@ class TUIPolishTests(unittest.TestCase):
         self.assertTrue(renderer._toggle_latest_transcript())
         output = renderer.console.export_text()
 
-        self.assertIn("● Bash(pwd) (ctrl+o to expand) R5", output)
+        self.assertIn("⏺ Bash(pwd) (ctrl+o to expand) R5", output)
         self.assertNotIn("R0", output)
         self.assertNotIn("ctrl+o to collapse", output)
 
@@ -2176,11 +2176,11 @@ class TUIPolishTests(unittest.TestCase):
         asyncio.run(renderer.render_agent_stream(events()))
         output = stream.getvalue()
 
-        # No static running row (and thus no premature tag / duplicate ●): the
+        # No static running row (and thus no premature tag / duplicate ⏺): the
         # tool appears once, as the final result row. The zero-exit trailer is
         # dropped, so a one-line command reads as its own output, not "2 lines".
-        self.assertNotIn("● Bash(date) (ctrl+o to expand)", output)
-        self.assertIn("● Bash(date)", output)
+        self.assertNotIn("⏺ Bash(date) (ctrl+o to expand)", output)
+        self.assertIn("⏺ Bash(date)", output)
         self.assertIn("⎿  Sun May 31 03:45:11 PM GMT 2026", output)
 
     def test_tool_result_box_render_returns_exact_line_count(self):
@@ -2234,7 +2234,7 @@ class TUIPolishTests(unittest.TestCase):
         asyncio.run(renderer.render_agent_stream(events(), status_right="Gemini 2.5 Flash"))
         output = stream.getvalue()
 
-        self.assertIn("● Bash(pwd) (ctrl+o to collapse)", output)
+        self.assertIn("⏺ Bash(pwd) (ctrl+o to collapse)", output)
         self.assertIn("⎿  /home/administrator/secops_v2 (ctrl+o to collapse)", output)
         self.assertNotIn("⎿  20ms · 2 lines", output)
         self.assertNotIn("⎿  Running", output)
@@ -2398,10 +2398,10 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("Thought for", output)
         # Non-TTY: the static running row is shown (spinner does not animate
         # here) but without the premature "(ctrl+o to expand)" tag.
-        self.assertIn("● Bash(date)", output)
-        self.assertNotIn("● Bash(date) (ctrl+o to expand)", output)
+        self.assertIn("⏺ Bash(date)", output)
+        self.assertNotIn("⏺ Bash(date) (ctrl+o to expand)", output)
         thought_tail = output.split("Thought for", 1)[1]
-        self.assertNotIn("\n\n● Bash(date)", thought_tail)
+        self.assertNotIn("\n\n⏺ Bash(date)", thought_tail)
 
     def test_renderer_caches_last_turn_for_ctrl_o_redraw(self):
         renderer = Renderer()
@@ -2421,12 +2421,12 @@ class TUIPolishTests(unittest.TestCase):
 
         asyncio.run(renderer.render_agent_stream(events(), runtime=runtime))
 
-        self.assertIn("●", runtime.ctrl_o_transcript_collapsed)
+        self.assertIn("⏺", runtime.ctrl_o_transcript_collapsed)
         self.assertIn("Bash", runtime.ctrl_o_transcript_collapsed)
         self.assertIn("(date)", runtime.ctrl_o_transcript_collapsed)
         self.assertNotIn("Need time", runtime.ctrl_o_transcript_collapsed)
         self.assertNotIn("Thought for", runtime.ctrl_o_transcript_collapsed)
-        self.assertIn("●", runtime.ctrl_o_transcript_expanded)
+        self.assertIn("⏺", runtime.ctrl_o_transcript_expanded)
         self.assertIn("Bash", runtime.ctrl_o_transcript_expanded)
         self.assertIn("(date)", runtime.ctrl_o_transcript_expanded)
         self.assertIn("ctrl+o to collapse", runtime.ctrl_o_transcript_expanded)
@@ -3079,8 +3079,10 @@ class TUIPolishTests(unittest.TestCase):
 
         self.assertIn("Thought for", output)
         self.assertIn("Analyzing response", output)
-        self.assertIn("Analyzing response\n  Final answer.", output)
-        self.assertIn("  Final answer.", output)
+        # G2: the committed narrative opens on the ⏺ turn bullet (col 0), content
+        # at col 2 — the thought preview stays 2-space indented above it.
+        self.assertIn("Analyzing response\n⏺ Final answer.", output)
+        self.assertIn("⏺ Final answer.", output)
         self.assertRegex(output, r"Final answer\.[^\n]*\n\n")
         self.assertEqual(output.count("Final answer."), 1)
 
@@ -3566,20 +3568,20 @@ class TUIPolishTests(unittest.TestCase):
         ToolCallBox.render(console, "run_shell", {"command": "pwd"}, is_dangerous=True, permission="ask")
         output = console.export_text()
 
-        self.assertIn("● Bash(pwd) (ctrl+o to expand)", output)
+        self.assertIn("⏺ Bash(pwd) (ctrl+o to expand)", output)
         self.assertNotIn("⚠", output)
         self.assertNotIn("ask", output)
 
-    def test_tool_call_row_uses_filled_circle_like_agy(self):
-        # Verified against the official agy hands-on transcript: tool rows always
-        # use a solid ● circle. State is encoded by colour + spinner, never by an
-        # empty ○ glyph.
+    def test_tool_call_row_uses_record_bullet(self):
+        # Claude Code parity (DESIGN_SPEC `glyph.turn_bullet` = ⏺ U+23FA): tool
+        # rows always use the record bullet ⏺. State is encoded by colour +
+        # spinner, never by an empty ○ glyph.
         console = Console(width=88, record=True, force_terminal=False, file=io.StringIO())
 
         ToolCallBox.render(console, "run_shell", {"command": "pwd"})
         output = console.export_text()
 
-        self.assertIn("● Bash(pwd) (ctrl+o to expand)", output)
+        self.assertIn("⏺ Bash(pwd) (ctrl+o to expand)", output)
         self.assertNotIn("○ Bash(pwd)", output)
 
     def test_tool_call_running_row_uses_full_neutral_circle(self):
@@ -3588,7 +3590,7 @@ class TUIPolishTests(unittest.TestCase):
         ToolCallBox.render_running(console, "run_shell", {"command": "pwd"})
         output = console.export_text()
 
-        self.assertIn("● Bash(pwd) (ctrl+o to expand)", output)
+        self.assertIn("⏺ Bash(pwd) (ctrl+o to expand)", output)
         self.assertNotIn("○ Bash(pwd)", output)
 
     def test_tool_call_indicator_and_name_are_status_colored(self):
@@ -3740,7 +3742,7 @@ class TUIPolishTests(unittest.TestCase):
         output = renderer.console.export_text(clear=False)
         html = renderer.console.export_html(inline_styles=True)
 
-        self.assertIn("● Bash(sleep 300) (ctrl+o to expand)", output)
+        self.assertIn("⏺ Bash(sleep 300) (ctrl+o to expand)", output)
         self.assertIn("⎿  ❌ Command timed out after 300s and was stopped", output)
         self.assertIn(COLORS["error"], html)
         self.assertNotIn(COLORS["success"], html)
@@ -3781,7 +3783,7 @@ class TUIPolishTests(unittest.TestCase):
         output = renderer.console.export_text(clear=False)
         html = renderer.console.export_html(inline_styles=True)
 
-        self.assertIn("● ConnectVpnConfig(/home/administrator/Downloads/lab.ovpn) (ctrl+o to expand)", output)
+        self.assertIn("⏺ ConnectVpnConfig(/home/administrator/Downloads/lab.ovpn) (ctrl+o to expand)", output)
         self.assertIn("⎿  VPN failed: /home/administrator/Downloads/lab.ovpn", output)
         self.assertIn(COLORS["error"], html)
         self.assertNotIn(COLORS["success"], html)

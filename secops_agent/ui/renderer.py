@@ -7,7 +7,7 @@ Key patterns from Antigravity CLI:
 
   Agent narrative text is indented with 2 spaces.
 
-  ● ToolName(arg_summary) (ctrl+o to expand)
+  ⏺ ToolName(arg_summary) (ctrl+o to expand)
 
   ⚠ Error or warning message
 
@@ -34,12 +34,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, List, Any
 
-from rich.console import Console
+from rich.console import Console, RenderableType
 from rich.markdown import Markdown
 from rich.live import Live
 from rich.markup import escape
 from rich.padding import Padding
 from rich.segment import Segment
+from rich.table import Table
+from rich.text import Text
 
 from secops_agent import __version__
 from secops_agent.ui.theme import rich_theme, COLORS, friendly_model_name, reduced_motion
@@ -308,22 +310,22 @@ def _build_tool_transcript_block_lines(
         if show_expand_tag else ""
     )
     if result is None:
-        # agy: tool rows are always a solid ● — running state is shown by colour
-        # (yellow) and the spinner, not by an empty circle.
+        # Claude Code parity: tool rows are always a ⏺ turn bullet — running
+        # state is shown by colour (yellow) and the spinner, not by the glyph.
         indicator_color = _tool_status_color(status="running")
         return [
-            f"[{indicator_color}]●[/{indicator_color}] {call_markup}{expand_suffix}"
+            f"[{indicator_color}]⏺[/{indicator_color}] {call_markup}{expand_suffix}"
         ]
 
     indicator_color = _tool_status_color(status=_tool_result_status(result))
     if expanded:
         terms = _search_terms_from_arguments(item.get("arguments"))
         return [
-            f"[{indicator_color}]●[/{indicator_color}] {call_markup}",
+            f"[{indicator_color}]⏺[/{indicator_color}] {call_markup}",
             *_build_expanded_tool_result_lines(result, width=width, terms=terms),
         ]
     return [
-        f"[{indicator_color}]●[/{indicator_color}] {call_markup}{expand_suffix}",
+        f"[{indicator_color}]⏺[/{indicator_color}] {call_markup}{expand_suffix}",
         *_build_collapsed_tool_result_lines(result, width=width),
     ]
 
@@ -360,22 +362,35 @@ class _StripTrailingWhitespace:
             yield Segment.line()
 
 
-def _agent_markdown(content: str, *, width: int) -> Padding:
+def _agent_markdown(content: str, *, width: int, bullet: bool = False) -> RenderableType:
     """Indented agent-prose Markdown, width-capped on wide terminals (P2).
 
     Left-indent of 2 matches the assistant narrative; on a terminal wider than
     ``layout.TEXT_MAX_WIDTH`` the prose column is capped (extra space becomes
-    right padding, later stripped) so full-width text never sprawls illegibly."""
+    right padding, later stripped) so full-width text never sprawls illegibly.
+
+    When *bullet* is set, a single ⏺ turn bullet (``glyph.turn_bullet``,
+    ``color.accent`` at rest — DESIGN_SPEC §1/§4.2) is hung at column 0 on the
+    first physical line while the prose and every continuation line stay at
+    column 2 (``line.hang_alignment``, via a two-column ``Table.grid`` whose
+    gutter renders once and top-aligns). Set it only for the full committed /
+    replayed turn, never the streaming live tail — once the tail is truncated its
+    first visible line is no longer the turn start, so a bullet there would float
+    mid-message."""
     left = 2
     inner = min(max(1, int(width) - left), layout.TEXT_MAX_WIDTH)
     right = max(0, int(width) - left - inner)
-    return Padding(
-        Markdown(normalize_agent_markdown(content), code_theme=_CODE_THEME),
-        (0, right, 0, left),
-    )
+    body = Markdown(normalize_agent_markdown(content), code_theme=_CODE_THEME)
+    if not bullet:
+        return Padding(body, (0, right, 0, left))
+    grid = Table.grid(padding=0)
+    grid.add_column(width=left, no_wrap=True)  # "⏺ " gutter → content lands at col 2
+    grid.add_column(width=inner)               # prose column, width-capped
+    grid.add_row(Text("⏺ ", style=COLORS["accent"]), body)
+    return Padding(grid, (0, right, 0, 0)) if right else grid
 
 
-def _build_text_transcript_lines(content: str, *, width: int) -> list[str]:
+def _build_text_transcript_lines(content: str, *, width: int, bullet: bool = True) -> list[str]:
     rendered = Console(
         width=width,
         record=True,
@@ -383,7 +398,7 @@ def _build_text_transcript_lines(content: str, *, width: int) -> list[str]:
         color_system=None,
         file=io.StringIO(),
     )
-    rendered.print(_agent_markdown(content, width=width))
+    rendered.print(_agent_markdown(content, width=width, bullet=bullet))
     return [line.rstrip() for line in rendered.export_text().splitlines()]
 
 
@@ -3489,7 +3504,7 @@ class Renderer:
                 if content:
                     self.console.print(
                         _StripTrailingWhitespace(
-                            _agent_markdown(content, width=_surface_width(self.console))
+                            _agent_markdown(content, width=_surface_width(self.console), bullet=True)
                         )
                     )
                     self.console.print()
@@ -3701,7 +3716,7 @@ class Renderer:
             if result is None else ""
         )
         self.console.print(
-            f"[{indicator_color}]●[/{indicator_color}] "
+            f"[{indicator_color}]⏺[/{indicator_color}] "
             f"[{COLORS['text']}]{escape(call_text)}[/{COLORS['text']}]{collapse_hint}",
             no_wrap=True,
             overflow="ellipsis",
@@ -3779,7 +3794,7 @@ class Renderer:
         return self._render_inline_thought_expansion()
 
     def _draw_collapsed_result(self) -> int:
-        """Draw the collapsed ● + ⎿ result block; return the lines printed."""
+        """Draw the collapsed ⏺ + ⎿ result block; return the lines printed."""
         status = _tool_result_status(self._latest_tool_result)
         n = ToolCallBox.render(
             self.console,
@@ -4061,7 +4076,7 @@ class Renderer:
         Antigravity-style streaming:
         - ▸ Thought for Xs (with content preview)
         - 2-space indented narrative text
-        - ● ToolName(args) collapsed
+        - ⏺ ToolName(args) collapsed
         - ⚠ for errors/warnings
         """
         text_accumulator = ""
@@ -4139,7 +4154,10 @@ class Renderer:
             if text_accumulator:
                 turn_items.append({"kind": "text", "content": text_accumulator})
                 _advance_ctrl_o_tail(_text_render_line_count(text_accumulator))
-                self.console.print(_StripTrailingWhitespace(_build_display(text_accumulator)))
+                # Committed turn (not the live tail) → hang the ⏺ turn bullet.
+                self.console.print(_StripTrailingWhitespace(
+                    _agent_markdown(text_accumulator, width=_surface_width(self.console), bullet=True)
+                ))
                 text_accumulator = ""
 
         def _tool_task_for_event(event: Any) -> Any | None:
@@ -4414,7 +4432,7 @@ class Renderer:
                     self._latest_transcript_expanded = False
                     self._clear_pending_tool_call_row()
                     # In a TTY the animated spinner (which now carries the tool
-                    # name) is the sole running indicator — skip the static ●
+                    # name) is the sole running indicator — skip the static ⏺
                     # row to avoid a redundant double indicator and a premature
                     # "(ctrl+o to expand)" tag. In a non-TTY (pipes, CI, captured
                     # transcript) the spinner does not animate, so print the
@@ -4484,9 +4502,9 @@ class Renderer:
                     elif keep_result_expanded and bool(getattr(self.console, "is_terminal", False)):
                         self._latest_transcript_expanded = True
                     elif not had_pending_call or pending_call_cleared:
-                        # ✅ agy grouping: suppress (ctrl+o) on the ● line when the
+                        # ✅ agy grouping: suppress (ctrl+o) on the ⏺ line when the
                         # ⎿ result summary below carries it. Error results render
-                        # inline without that affordance, so the ● line keeps it.
+                        # inline without that affordance, so the ⏺ line keeps it.
                         collapsed_line_count += ToolCallBox.render(
                             self.console,
                             event.name,

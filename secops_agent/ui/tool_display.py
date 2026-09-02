@@ -1,6 +1,6 @@
 """
 Tool display components matching Antigravity CLI style exactly.
-Uses ● prefix, compact single-line format, collapsed results.
+Uses ⏺ prefix, compact single-line format, collapsed results.
 """
 
 from __future__ import annotations
@@ -353,11 +353,11 @@ def _tool_status_color(status: str = "", permission: str = "", is_dangerous: boo
 
 
 def _tool_status_marker(status: str = "", permission: str = "", is_dangerous: bool = False) -> str:
-    # agy convention (verified against the official hands-on transcript): tool
-    # rows always use a SOLID circle "●". State is encoded by COLOUR, not by the
+    # Claude Code parity (DESIGN_SPEC `glyph.turn_bullet` = ⏺ U+23FA): tool rows
+    # always use the record bullet "⏺". State is encoded by COLOUR, not by the
     # glyph — yellow while pending/running, green on success, red on error — with
     # an animated spinner shown separately during active execution.
-    return "●"
+    return "⏺"
 
 
 def _tool_call_markup(tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -743,7 +743,7 @@ def _clear_rendered_lines(count: int):
 
 class ToolCallBox:
     """Renders tool call in Antigravity CLI style:
-        ● ToolName(arg_summary) (ctrl+o to expand)
+        ⏺ ToolName(arg_summary) (ctrl+o to expand)
 
     The ``show_expand_tag`` parameter controls whether the ``(ctrl+o to
     expand)`` label is appended.  Per verified agy behaviour, the tag should
@@ -794,13 +794,13 @@ class ToolCallBox:
         arguments: Dict[str, Any],
     ):
         """Render a permission request in Antigravity style:
-            ● Requested Permission: write_file(/path) (ctrl+o to expand)
+            ⏺ Requested Permission: write_file(/path) (ctrl+o to expand)
         """
         call_markup = _tool_call_markup(tool_name, arguments)
         risk_badge = _risk_badge_markup(tool_name)
 
         console.print(
-            f"\n[{COLORS['warning']}]●[/{COLORS['warning']}] "
+            f"\n[{COLORS['warning']}]⏺[/{COLORS['warning']}] "
             f"{call_markup} {risk_badge} "
             f"[{COLORS['text_muted']}](ctrl+o to expand)[/{COLORS['text_muted']}]"
         )
@@ -823,7 +823,7 @@ class ToolCallBox:
         )
         prefix = "\n" if leading_blank else ""
         console.print(
-            f"{prefix}[{indicator_color}]●[/{indicator_color}] "
+            f"{prefix}[{indicator_color}]⏺[/{indicator_color}] "
             f"{call_markup}{expand_tag} {risk_badge}",
             no_wrap=True,
             overflow="ellipsis",
