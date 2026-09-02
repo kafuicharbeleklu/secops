@@ -50,7 +50,10 @@ class ThemeSwitchCtrlOTests(unittest.TestCase):
 
     def test_theme_switch_reset_drops_stale_coloured_anchor(self):
         T.set_theme("paprika")
-        paprika_accent = T._PALETTES["paprika"]["accent_bright"].lower()
+        # The tool status bullet carries a palette-specific hex (the name is now
+        # neutral `text` after G4, so track `success` — the success-tool bullet —
+        # which differs across palettes where text/text_muted are shared neutrals).
+        paprika_success = T._PALETTES["paprika"]["success"].lower()
 
         renderer = Renderer()
         renderer.console = Console(theme=T.rich_theme, force_terminal=True,
@@ -59,7 +62,7 @@ class ThemeSwitchCtrlOTests(unittest.TestCase):
         self._render_turn(renderer, runtime)
 
         # The pre-switch anchor has paprika hex baked in — the leak source.
-        self.assertIn(paprika_accent, runtime.ctrl_o_anchor_collapsed.lower())
+        self.assertIn(paprika_success, runtime.ctrl_o_anchor_collapsed.lower())
 
         # The /theme handler switches the palette and drops the caches.
         T.set_theme("neon")

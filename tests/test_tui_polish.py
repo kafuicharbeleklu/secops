@@ -3593,7 +3593,7 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("⏺ Bash(pwd) (ctrl+o to expand)", output)
         self.assertNotIn("○ Bash(pwd)", output)
 
-    def test_tool_call_indicator_and_name_are_status_colored(self):
+    def test_tool_call_indicator_status_colored_name_neutral(self):
         console = Console(
             width=88,
             record=True,
@@ -3607,10 +3607,13 @@ class TUIPolishTests(unittest.TestCase):
         ToolCallBox.render(console, "run_shell", {"command": "pwd"}, status="error", permission="allow")
         html = console.export_html(inline_styles=True)
 
+        # The state bullet carries the status colour (success / warning / error)…
         self.assertIn(COLORS["success"], html)
         self.assertIn(COLORS["warning"], html)
         self.assertIn(COLORS["error"], html)
-        self.assertIn(COLORS["accent_bright"].lower(), html.lower())
+        # …while the tool NAME is neutral bold text, never accent (G4).
+        self.assertIn(COLORS["text"].lower(), html.lower())
+        self.assertNotIn(COLORS["accent_bright"].lower(), html.lower())
         self.assertIn("font-weight: bold", html)
 
     def test_tool_result_renders_single_line_with_corner_marker(self):

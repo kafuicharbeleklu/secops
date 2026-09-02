@@ -87,6 +87,18 @@ Ordre canonique des segments, de gauche à droite :
 | `line.tool_call.status_glyph` | *(néant)*             | L'état n'ajoute **pas** de glyphe : il colore `glyph.turn_bullet`. |
 | `line.tool_call.duration`     | inline, fin de ligne résultat | La durée s'affiche sur le résultat, pas sur l'appel (§1.3). |
 
+**Extension SecOps — badge de risque (`line.tool_call.risk_badge`).** Élément **hors
+référence Claude Code** : le domaine offensif ajoute un badge de risque `R<0–8>` à
+chaque ligne d'appel, pour que l'opérateur évalue la dangerosité d'une action d'un
+coup d'œil (FMT-01). Ce n'est **pas** un défaut de parité mais un token **normatif de
+ce produit** (décision produit, 2026-09-02), tenu aux mêmes exigences de vérifiabilité :
+
+| Token | Valeur | Condition |
+|-------|--------|-----------|
+| `line.tool_call.risk_badge.form`     | `R<n>` (n ∈ 0–8) ou `R?` | Un **seul** badge par ligne d'appel ; `R?` quand le tier ne se résout pas. |
+| `line.tool_call.risk_badge.position` | suit `line.tool_call` (nom+args), même ligne | Le badge vient **après** le nom+args ; fin de ligne dans les rangs *collapsed*/*running* (après le hint `ctrl+o`), avant le hint dans la ligne de permission. Jamais avant le nom. |
+| `line.tool_call.risk_badge.color`    | palier → rôle sémantique | R0–R2 = `color.text_muted` ; R3–R5 = `color.warning` ; R6–R7 = `color.error` ; R8 = `bold` + `color.error` (variante vive `danger_bright`) ; `R?` = `color.text_dim`. |
+
 ### 1.3 Anatomie d'une ligne de résultat (`line.tool_result`)
 
 ```
@@ -259,9 +271,10 @@ Indentation : `indent.bullet_col`, `indent.bullet_content`,
 `indent.narrative`, `indent.list_step`, `line.hang_alignment`.
 
 Ligne : `line.tool_call.*` (`.name_style`, `.args_style`, `.arg_form`,
-`.status_glyph`, `.duration`), `line.tool_result.*` (`.corner`, `.headline`,
-`.error_style`), `line.diff.*` (`.add`, `.del`, `.gutter`). (`line.hang_alignment`
-est rangé sous *Indentation* par nature.)
+`.status_glyph`, `.duration`, **extension SecOps** `.risk_badge.form` /
+`.risk_badge.position` / `.risk_badge.color`), `line.tool_result.*` (`.corner`,
+`.headline`, `.error_style`), `line.diff.*` (`.add`, `.del`, `.gutter`).
+(`line.hang_alignment` est rangé sous *Indentation* par nature.)
 
 Repli : `fold.result_visible_lines`, `fold.diff_visible_lines`, `fold.line_width`,
 `fold.counter_format`, `fold.counter_position`, `fold.expand_hint`,

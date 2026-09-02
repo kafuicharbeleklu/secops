@@ -364,8 +364,11 @@ def _tool_call_markup(tool_name: str, arguments: Dict[str, Any]) -> str:
     display_name = _friendly_tool_name(tool_name)
     arg_summary = _compact_args_summary(tool_name, arguments)
     args = f"({arg_summary})" if arg_summary else "()"
+    # G4 (DESIGN_SPEC `line.tool_call.name_style`): the tool name is `bold` +
+    # `color.text`, NOT accent — colour is a signal reserved for the state bullet
+    # and headings (§4 `color.principle`), so the name must not compete with them.
     return (
-        f"[bold {COLORS['accent_bright']}]{escape(display_name)}[/]"
+        f"[bold {COLORS['text']}]{escape(display_name)}[/]"
         f"[dim]{escape(args)}[/dim]"
     )
 

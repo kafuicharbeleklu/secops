@@ -39,19 +39,20 @@ tels. Ils restent listés car la référence normative est désormais `DESIGN_SP
 | G1 | `glyph.turn_bullet` | `⏺` U+23FA | `⏺` U+23FA — ✅ **résolu** | ~~P1~~ |
 | G2 | `indent.narrative` / `glyph.turn_bullet` sur la prose | prose sous une puce `⏺`, col 2 | prose sous puce `⏺`, col 2 — ✅ **résolu** | ~~P1~~ |
 | G3 | `glyph.thinking` | `✻` U+273B | `▸` U+25B8 | P3 |
-| G4 | `line.tool_call.name_style` | `bold` + `color.text` | `bold` + `accent_bright` | P2 |
+| G4 | `line.tool_call.name_style` | `bold` + `color.text` | `bold` + `color.text` — ✅ **résolu** | ~~P2~~ |
 | G5 | `fold.meta_separator` cohérence | ` · ` partout | mélange ` · ` et 2ᵉ ligne méta autonome | P3 |
 | G6 | `md.list.bullet` | `•` U+2022 | rendu Rich par défaut (`•`), puce colorée `accent` | conforme |
-| G7 | Badge de risque `R0–R8` | absent de la réf. | présent sur chaque ligne d'appel | P2 |
+| G7 | Badge de risque `R0–R8` | absent de la réf. | présent — ✅ **accepté** (extension SecOps documentée) | extension |
 | G8 | `line.tool_call.arg_form` couleur args | `color.text_muted` | `[dim]` (atténuation Rich, pas le rôle muted) | P3 |
 | G9 | `color.state_map` (repos) | `accent` | `accent` ✔ | conforme |
 | G10 | `md.code.block` cadre | sans bordure, indenté col 2 | conforme (Padding left=2, pas de panel) | conforme |
 | G11 | `md.table.style` | filets `text_dim` + en-tête `bold` | non implémenté (rendu Rich par défaut) | P3 |
 | G12 | `md.code.inline` | `accent` bright, **non-gras** | `bold accent_bright` (gras appliqué) | P3 |
 
-Écarts ouverts : **G3, G4, G5, G7, G8, G11, G12**. Les deux écarts P1 — **G1**
-et **G2** — sont **résolus** le 2026-09-02 (voir les notes de résolution dans le
-détail ci-dessous). (G6, G9, G10 vérifiés conformes, listés pour traçabilité.)
+Écarts ouverts : **G3, G5, G8, G11, G12**. Résolus le 2026-09-02 : **G1**, **G2**
+(P1) et **G4** (P2). **G7** est **accepté** comme extension SecOps documentée
+(décision produit — voir sa note ci-dessous), plus un écart ouvert. (G6, G9, G10
+vérifiés conformes, listés pour traçabilité.)
 
 ---
 
@@ -129,7 +130,13 @@ détail ci-dessous). (G6, G9, G10 vérifiés conformes, listés pour traçabilit
   rendu si l'on veut la parité stricte ; sinon documenter `▸` comme variante `agy`
   tolérée.
 
-### G4 — Nom d'outil coloré `accent_bright` au lieu de `text` (P2)
+### G4 — Nom d'outil coloré `accent_bright` au lieu de `text` (P2) — ✅ résolu 2026-09-02
+
+> **Résolu.** `_tool_call_markup` (`tool_display.py`) rend le nom d'outil en
+> `bold` + `color.text` au lieu de `bold` + `accent_bright` : la couleur redevient
+> un signal réservé à la puce d'état et aux titres (§4 `color.principle`). Régression
+> gardée par `test_tool_call_indicator_status_colored_name_neutral` (le nom est en
+> `color.text`, `accent_bright` absent de la ligne d'appel).
 
 - **Token :** `line.tool_call.name_style` — réf. `bold` + `color.text`.
 - **Actuel :** `bold` + `accent_bright`.
@@ -156,7 +163,14 @@ détail ci-dessous). (G6, G9, G10 vérifiés conformes, listés pour traçabilit
   le compteur. **Correctif :** fusionner la référence de log dans la ligne méta
   unique quand elle tient, sinon la garder atténuée.
 
-### G7 — Badge de risque `R0–R8` sur chaque ligne d'appel (P2)
+### G7 — Badge de risque `R0–R8` sur chaque ligne d'appel (P2) — ✅ accepté (extension) 2026-09-02
+
+> **Accepté comme extension SecOps (décision produit, non un correctif de parité).**
+> Le badge est **conservé tel quel** — aucun changement de comportement — et devient
+> un token **normatif** documenté dans `DESIGN_SPEC.md` §1.2 (`line.tool_call.risk_badge`
+> : `.form` `R<0–8>`/`R?`, `.position` après nom+args, `.color` par palier). Il sort
+> donc de la liste des écarts ouverts : ce n'est plus une divergence à corriger mais
+> une extension assumée, propre au domaine offensif (FMT-01).
 
 - **Token :** absent de la référence Claude Code (pas de badge par ligne).
 - **Actuel :** `_risk_badge_markup` ajoute `R0`–`R8` coloré par palier à **chaque**
@@ -241,11 +255,12 @@ détail ci-dessous). (G6, G9, G10 vérifiés conformes, listés pour traçabilit
 ## Ordre de correction suggéré (par impact)
 
 1. ✅ **G1** (`●`→`⏺`) et **G2** (puce de prose) — P1, **faits** le 2026-09-02.
-2. **G4** (nom d'outil en `text`) et **G8** (args en `text_muted`) — P2/P3,
-   remettent la couleur au rang de signal.
+2. ✅ **G4** (nom d'outil en `text`) **fait** le 2026-09-02 ; **G8** (args en
+   `text_muted`) reste — P3, remet la couleur au rang de signal.
 3. **G5** (fusion ligne méta), **G3** (glyphe `✻`), **G11** (style de tableau) et
    **G12** (code inline non-gras) — P3, parité fine.
-4. **G7** (badge de risque) — décision produit, pas un correctif de parité.
+4. ✅ **G7** (badge de risque) — **décision prise** le 2026-09-02 : accepté comme
+   extension SecOps, documenté dans `DESIGN_SPEC.md` §1.2 (pas un correctif de parité).
 
 *Livrable P0. Cette analyse se recalcule contre `docs/DESIGN_SPEC.md` à chaque
 évolution du rendu ; citations re-vérifiées le 2026-09-02 contre `a36164f`.*
