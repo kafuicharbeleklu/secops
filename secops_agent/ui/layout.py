@@ -34,6 +34,7 @@ from rich.cells import cell_len as _rich_cell_len, set_cell_size as _rich_set_ce
 __all__ = [
     "SAFE_WIDTH", "SAFE_HEIGHT", "NARROW_MAX", "WIDE_MIN",
     "TEXT_MAX_WIDTH", "FRAME_MAX_WIDTH", "RESIZE_DEBOUNCE",
+    "INDENT", "RESULT_INDENT",
     "Breakpoint", "Layout", "ResizeDebouncer",
     "strip_ansi", "cell_len", "fit_cell", "pad_cell",
     "terminal_size", "is_tty", "color_enabled", "classify", "resolve",
@@ -55,6 +56,16 @@ WIDE_MIN = 120
 # while the frame (prompt/toolbar/tool output) may run a little wider.
 TEXT_MAX_WIDTH = 100
 FRAME_MAX_WIDTH = 120
+
+# ── Indentation columns (DESIGN_SPEC §1.1 indent.*) ──
+# The single source of truth for the transcript's left-indent columns. INDENT is
+# the narrative / bullet-content / result-corner / list-step column (indent.narrative
+# = indent.bullet_content = indent.result_corner_col = indent.list_step = 2);
+# RESULT_INDENT is the result-content / result-meta column (indent.result_content
+# = indent.result_meta = 5). Response-path code derives its indent from these,
+# never a bare "  " literal — see secops_agent/ui/typography.py.
+INDENT = 2
+RESULT_INDENT = 5
 
 # Coalescing window for a drag-resize burst (seconds). Sits alongside the
 # streaming render throttle; long enough to swallow a drag, short enough to feel

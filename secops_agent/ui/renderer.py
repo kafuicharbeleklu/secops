@@ -105,6 +105,8 @@ _ARCHIVED_CALL_RE = re.compile(
 # View builders/primitives live in secops_agent.ui.views; re-exported
 # here so existing imports and Renderer methods resolve unchanged.
 from secops_agent.ui import layout
+from secops_agent.ui import typography
+from secops_agent.ui.typography import Boundary
 from secops_agent.ui.views.common import (
     SettingsItem,
     SettingsSelection,
@@ -377,7 +379,7 @@ def _agent_markdown(content: str, *, width: int, bullet: bool = False) -> Render
     replayed turn, never the streaming live tail — once the tail is truncated its
     first visible line is no longer the turn start, so a bullet there would float
     mid-message."""
-    left = 2
+    left = layout.INDENT  # DESIGN_SPEC indent.narrative / bullet_content (single source)
     inner = min(max(1, int(width) - left), layout.TEXT_MAX_WIDTH)
     right = max(0, int(width) - left - inner)
     body = Markdown(normalize_agent_markdown(content), code_theme=_CODE_THEME)
@@ -623,12 +625,9 @@ def normalize_agent_markdown(text: str) -> str:
         normalized.append(line.rstrip())
 
     normalized = _separate_list_blocks(normalized)
-
-    while normalized and normalized[0] == "":
-        normalized.pop(0)
-    while normalized and normalized[-1] == "":
-        normalized.pop()
-
+    # The blank-line rule (no leading/trailing blank, no ≥2 consecutive) lives once
+    # in typography.collapse_blank_lines — reused here so it is not re-implemented.
+    normalized = typography.collapse_blank_lines(normalized)
     return "\n".join(normalized)
 
 
@@ -1106,7 +1105,7 @@ class Renderer:
         for line in lines[1:]:
             _band(" ", line)
         if trailing_blank:
-            self.console.print()
+            typography.emit(self.console, Boundary.AFTER_USER_TURN)
 
     def render_empty_prompt_frame(self):
         """Render the idle prompt frame before inline shortcut overlays."""
@@ -3507,7 +3506,8 @@ class Renderer:
                             _agent_markdown(content, width=_surface_width(self.console), bullet=True)
                         )
                     )
-                    self.console.print()
+                    # text↔tool boundary — same rhythm token as the streaming path.
+                    typography.emit(self.console, Boundary.BEFORE_TOOL_GROUP)
                 for call in getattr(msg, "tool_calls", []) or []:
                     if isinstance(call, dict):
                         pending_tool_calls.append(dict(call))
@@ -4316,8 +4316,12 @@ class Renderer:
 
                     if event.done:
                         _flush_live_text()
-                        self.console.print()
-                        _advance_ctrl_o_tail(1)
+                        # text↔tool boundary — single-sourced via the rhythm token
+                        # (same rule the replay path uses); the printed-blank count
+                        # drives ctrl+o line-accounting.
+                        _advance_ctrl_o_tail(
+                            typography.emit(self.console, Boundary.BEFORE_TOOL_GROUP)
+                        )
                     else:
                         text_accumulator += event.content
                         # Throttled re-render: max ~20fps
