@@ -612,10 +612,16 @@ def _streaming_tail(text: str, viewport_height: int) -> str:
     redraw restacks it (the 5-6x cascade). The complete answer is written once on
     the done event by _flush_live_text, so nothing is lost by cropping the tail."""
     limit = max(4, (viewport_height or 28) - 6)
-    lines = text.split("\n")
-    if len(lines) <= limit:
-        return text
-    return "\n".join(lines[-limit:])
+    # Walk back over the last `limit` newlines instead of splitting the whole
+    # (ever-growing) accumulator on every 50ms tick — O(limit) per tick, not O(n),
+    # so a long streamed answer stays smooth instead of degrading quadratically.
+    cut = len(text)
+    for _ in range(limit):
+        newline = text.rfind("\n", 0, cut)
+        if newline == -1:
+            return text  # fewer than `limit` lines — nothing to crop
+        cut = newline
+    return text[cut + 1:]
 
 
 def _classify_stream_key_chunk(data: bytes) -> str:
