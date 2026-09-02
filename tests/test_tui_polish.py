@@ -1811,6 +1811,67 @@ class TUIPolishTests(unittest.TestCase):
         self.assertEqual(second, "tool-output-collapsed")
         self.assertFalse(runtime.ctrl_o_anchor_is_expanded)
 
+    def test_ctrl_o_refuses_screen_filling_expansion_instead_of_stacking_copies(self):
+        # Regression for the ctrl+o cascade: on a roomy terminal a nearly
+        # screen-filling expansion is anchored so close to the bottom that the
+        # in-place rewrite's print overflows. The block then lands higher than
+        # the cursor bookkeeping assumes, the next collapse's delete misses its
+        # top, and every toggle leaves another stacked "● Sysinfo(all)" copy in
+        # the scrollback. Such an expansion is now refused and routed to
+        # /trajectory, so repeated toggles can never stack.
+        runtime = RuntimeState()
+        runtime.set_ctrl_o_anchor(
+            ["● Sysinfo(all) (ctrl+o to expand)", "  ⎿  Hostname: ubuntu +43 lines"],
+            ["● Sysinfo(all)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:"]
+            + [f"    line {i}" for i in range(42)],
+            tail_lines=1,
+        )
+        memory = ConversationMemory()
+        stream = io.StringIO()
+        console = Console(width=80, force_terminal=True, color_system=None, file=stream)
+
+        with patch(
+            "secops_agent.ui.input_handler.shutil.get_terminal_size",
+            return_value=os.terminal_size((80, 50)),
+        ):
+            first = _show_ctrl_o_surface(memory, runtime, console)
+            second = _show_ctrl_o_surface(memory, runtime, console)
+
+        output = stream.getvalue()
+        self.assertEqual(first, "tool-output-too-tall")
+        self.assertEqual(second, "tool-output-too-tall")
+        # never flips into the expanded state, so no in-place rewrite is emitted
+        self.assertFalse(runtime.ctrl_o_anchor_is_expanded)
+        self.assertNotIn("\x1b[2M", output)
+        # the user is told where the full output lives, exactly once (no spam)
+        self.assertIn("/trajectory", output)
+        self.assertEqual(output.count("Output too tall"), 1)
+
+    def test_ctrl_o_still_expands_an_output_that_fits_the_screen(self):
+        # The cascade guard must not cost ordinary expansions: a short output on
+        # the same roomy terminal still toggles in place.
+        runtime = RuntimeState()
+        runtime.set_ctrl_o_anchor(
+            ["● Sysinfo(all) (ctrl+o to expand)", "  ⎿  Hostname: ubuntu +5 lines"],
+            ["● Sysinfo(all)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:",
+             "    one", "    two"],
+            tail_lines=2,
+        )
+        memory = ConversationMemory()
+        stream = io.StringIO()
+        console = Console(width=80, force_terminal=True, color_system=None, file=stream)
+
+        with patch(
+            "secops_agent.ui.input_handler.shutil.get_terminal_size",
+            return_value=os.terminal_size((80, 50)),
+        ):
+            first = _show_ctrl_o_surface(memory, runtime, console)
+            second = _show_ctrl_o_surface(memory, runtime, console)
+
+        self.assertEqual(first, "tool-output")
+        self.assertEqual(second, "tool-output-collapsed")
+        self.assertFalse(runtime.ctrl_o_anchor_is_expanded)
+
     def test_ctrl_o_collapse_stays_silent_when_expanded_anchor_is_too_tall(self):
         runtime = RuntimeState()
         collapsed_lines = [

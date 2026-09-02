@@ -85,6 +85,19 @@ def _ctrl_o_output_visible_limit(default: int = 40) -> int:
     return max(1, min(default, _terminal_height() - 8))
 
 
+# Guard rails for the anchored ctrl+o toggle's in-place rewrite. On a roomy
+# terminal a nearly-screen-filling expansion is anchored so close to the bottom
+# that the rewrite's print overflows: the block lands higher than the cursor
+# bookkeeping assumes, so the next collapse's delete misses its top and every
+# toggle leaves another stacked copy (the ctrl+o cascade). Such an expansion is
+# also pointless — it would fill the screen anyway — so it is routed to
+# /trajectory instead. Only applied above _ANCHOR_TOGGLE_MIN_HEIGHT: on short
+# terminals the existing budget cap already bounds the block, and a 6-row
+# headroom there would refuse every expansion.
+_ANCHOR_TOGGLE_HEADROOM = 6
+_ANCHOR_TOGGLE_MIN_HEIGHT = 20
+
+
 def _completion_display(label: str, description: str = "", label_width: int = 48) -> str:
     if not description:
         return label
@@ -627,6 +640,25 @@ def _toggle_anchored_ctrl_o_surface(runtime: Any | None, console: Any | None) ->
                 f"/trajectory for the full output[/{COLORS['text_muted']}]"
             )
             next_lines = next_lines[:keep] + [note]
+
+        # Refuse an in-place expansion that would sit too close to the screen
+        # bottom to rewrite reliably (see _ANCHOR_TOGGLE_HEADROOM): the block
+        # stays collapsed and the full output is one command away in
+        # /trajectory, instead of every toggle stacking another copy.
+        if (
+            terminal_height >= _ANCHOR_TOGGLE_MIN_HEIGHT
+            and len(next_lines) + tail_lines > terminal_height - _ANCHOR_TOGGLE_HEADROOM
+        ):
+            if not bool(getattr(runtime, "ctrl_o_anchor_too_tall_notified", False)):
+                console.print(
+                    f"  [{COLORS['text_muted']}]⎿  Output too tall to expand here — "
+                    f"/trajectory for the full view[/{COLORS['text_muted']}]"
+                )
+                # Count the hint so the anchored bookkeeping stays aligned.
+                if hasattr(runtime, "advance_ctrl_o_anchor_lines"):
+                    runtime.advance_ctrl_o_anchor_lines(1)
+                setattr(runtime, "ctrl_o_anchor_too_tall_notified", True)
+            return "tool-output-too-tall"
 
     output.write("\r")
     if distance_to_start:

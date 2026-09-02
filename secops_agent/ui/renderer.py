@@ -3715,7 +3715,18 @@ class Renderer:
             self.console.print()
             self.console.print(f"  [{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
             rendered_lines += 2
-            visible_limit = _ctrl_o_output_visible_limit(self.console)
+            # Streaming ctrl+o expands *inline* with plain print + cursor-up clear.
+            # If the block is taller than the room below the cursor, printing it
+            # scrolls older rows into scrollback that cursor-up can never re-enter,
+            # so every toggle restacks a copy (the 5-6x cascade the streaming-text
+            # path was hardened against). Keep the inline preview to ~half the
+            # viewport so the block always clears in place; the full output stays
+            # one keystroke away via the post-turn ctrl+o surface / /trajectory.
+            surface_height = _surface_height(self.console)
+            visible_limit = max(
+                4,
+                min(_ctrl_o_output_visible_limit(self.console), surface_height // 2 - 4),
+            )
             visible_lines = lines[:visible_limit]
             output_width = max(16, _surface_width(self.console) - 6)
             for line in visible_lines:

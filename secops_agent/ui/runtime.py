@@ -142,6 +142,7 @@ class RuntimeState:
     ctrl_o_anchor_rendered_lines: int = 0
     ctrl_o_anchor_tail_lines: int = 0
     ctrl_o_anchor_prompt_tail_applied: bool = False
+    ctrl_o_anchor_too_tall_notified: bool = False
 
     def reset_ctrl_o_surface(self, *, clear_anchor: bool = False):
         self.ctrl_o_expanded_artifact_id = ""
@@ -160,6 +161,7 @@ class RuntimeState:
         self.ctrl_o_anchor_rendered_lines = 0
         self.ctrl_o_anchor_tail_lines = 0
         self.ctrl_o_anchor_prompt_tail_applied = False
+        self.ctrl_o_anchor_too_tall_notified = False
 
     def set_ctrl_o_anchor(
         self,
@@ -177,6 +179,7 @@ class RuntimeState:
         self.ctrl_o_anchor_rendered_lines = len(collapsed_lines)
         self.ctrl_o_anchor_tail_lines = max(0, int(tail_lines or 0))
         self.ctrl_o_anchor_prompt_tail_applied = False
+        self.ctrl_o_anchor_too_tall_notified = False
 
     def advance_ctrl_o_anchor_lines(self, count: int):
         if count <= 0 or not self.ctrl_o_anchor_collapsed or self.ctrl_o_anchor_rendered_lines <= 0:
