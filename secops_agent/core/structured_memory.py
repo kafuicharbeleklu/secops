@@ -338,6 +338,7 @@ class StructuredMemory:
         self,
         budget_tokens: int = 16_000,
         include_conversation: bool = True,
+        include_mission_frame: bool = True,
     ) -> str:
         """Assemble a compact context block for the system prompt.
 
@@ -351,8 +352,10 @@ class StructuredMemory:
 
         # 1. Mission state (compact). If the knowledge base already has the
         # attack surface, keep mission metadata only to avoid duplicate prompt
-        # sections.
-        if self.mission:
+        # sections. Skipped for a conceptual/answer-only turn, where the SCOPING
+        # frame ("Awaiting authorized scope") only pushes the model to scope
+        # instead of answering the question.
+        if self.mission and include_mission_frame:
             has_kb = bool(
                 self.knowledge.hosts
                 or self.knowledge.services
@@ -372,7 +375,10 @@ class StructuredMemory:
 
         # 3. Deterministic candidate actions. These are advisory only; tool
         # execution remains governed by the agent loop and permission engine.
-        if self.mission:
+        # Skipped for a conceptual/answer-only turn: the top candidate for a
+        # target-less mission is "Define authorized scope" (priority 100), which
+        # argues against just answering the question.
+        if self.mission and include_mission_frame:
             planner = self._planner or MissionPlanner()
             plan_summary = planner.build_prompt_summary(self.mission)
             if plan_summary:

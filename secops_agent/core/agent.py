@@ -2068,7 +2068,10 @@ class SecOpsAgent:
                     llm_context["post_exploitation_boundary"] = POST_EXPLOITATION_BOUNDARY
             # Inject structured context into system prompt, primed with any
             # relevant prior lessons (memory briefing).
-            ctx_str = sm.build_context_for_llm(include_conversation=False)
+            ctx_str = sm.build_context_for_llm(
+                include_conversation=False,
+                include_mission_frame=not getattr(request_decision, "conceptual", False),
+            )
             parts = [
                 ctx_str,
                 self._relevant_lessons_briefing(mission),

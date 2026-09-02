@@ -499,6 +499,24 @@ class SafeBaselineToolExposureTests(unittest.TestCase):
         names = {s["name"] for s in agent._tools_schema_for_decision(decision)}
         self.assertIn("nmap_scan", names)
 
+    def test_conceptual_turn_drops_the_scoping_frame_from_context(self):
+        from secops_agent.core.memory import ConversationMemory
+        from secops_agent.core.mission import MissionContext
+        from secops_agent.core.structured_memory import StructuredMemory
+
+        sm = StructuredMemory(conversation=ConversationMemory(), mission=MissionContext(name="test"))
+        normal = sm.build_context_for_llm(include_conversation=False, include_mission_frame=True)
+        conceptual = sm.build_context_for_llm(include_conversation=False, include_mission_frame=False)
+
+        # A normal turn injects the SCOPING mission frame + the priority-100
+        # "Define authorized scope" candidate action.
+        self.assertIn("SCOPING", normal.upper())
+        self.assertIn("Define authorized scope", normal)
+        # A conceptual/answer-only turn injects neither — nothing pushes the model
+        # to scope instead of answering.
+        self.assertNotIn("Define authorized scope", conceptual)
+        self.assertNotIn("Awaiting authorized scope", conceptual)
+
     def test_unapproved_exploit_exposes_safe_baseline_not_offensive_primitives(self):
         from secops_agent.core.request_context import classify_request
 
