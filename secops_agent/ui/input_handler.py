@@ -612,6 +612,22 @@ def _toggle_anchored_ctrl_o_surface(runtime: Any | None, console: Any | None) ->
     if distance_to_start > max(0, terminal_height - 1):
         return "tool-output-unchanged"
 
+    # Keep the EXPANDED block within reach of a later in-place collapse: the
+    # collapse rewrites from the expanded height, so if that height plus the tail
+    # scrolls the block's top off-screen, the collapse would be refused and the
+    # block would get stuck open (the "ctrl+o won't close" bug). Cap the expansion
+    # so tail + expanded height always fits; the full output stays in /trajectory.
+    if next_expanded:
+        budget = max(1, terminal_height - 1 - tail_lines)
+        if len(next_lines) > budget:
+            keep = max(1, budget - 1)
+            hidden = len(next_lines) - keep
+            note = (
+                f"     [{COLORS['text_muted']}]... {hidden:,} more lines — "
+                f"/trajectory for the full output[/{COLORS['text_muted']}]"
+            )
+            next_lines = next_lines[:keep] + [note]
+
     output.write("\r")
     if distance_to_start:
         output.write(f"\x1b[{distance_to_start}A")

@@ -1771,9 +1771,45 @@ class TUIPolishTests(unittest.TestCase):
         self.assertEqual(result, "tool-output")
         self.assertIn("\x1b[6A", output)
         self.assertIn("\x1b[2M", output)
-        self.assertIn("\x1b[6L", output)
+        # On a 7-row terminal with a 4-line tail, a full 6-line expansion could
+        # not be reached to collapse (the "won't close" bug), so the expansion is
+        # capped to fit (budget = 7-1-4 = 2 lines) and points at /trajectory. The
+        # collapse then always succeeds because it rewrites from this bounded height.
+        self.assertIn("\x1b[2L", output)
+        self.assertNotIn("\x1b[6L", output)
+        self.assertIn("more lines", output)
+        self.assertIn("/trajectory", output)
         self.assertTrue(runtime.ctrl_o_anchor_is_expanded)
+        self.assertEqual(runtime.ctrl_o_anchor_rendered_lines, 2)
         self.assertEqual(runtime.ctrl_o_anchor_tail_lines, 4)
+
+    def test_ctrl_o_expand_then_collapse_round_trips_for_a_tall_block(self):
+        # Regression for "ctrl+o won't close": a tall expansion used to scroll its
+        # own top off-screen, so the collapse was refused and the block stuck open.
+        # The expansion is now capped to stay reachable, so collapse always works.
+        runtime = RuntimeState()
+        runtime.set_ctrl_o_anchor(
+            ["● Bash(sysinfo) (ctrl+o to expand)", "  ⎿  40 lines (ctrl+o to expand)"],
+            ["● Bash(sysinfo)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:"]
+            + [f"    line {i}" for i in range(24)],
+        )
+        runtime.advance_ctrl_o_anchor_lines(2)  # small tail (just the prompt)
+        memory = ConversationMemory()
+        console = Console(width=80, force_terminal=True, color_system=None, file=io.StringIO())
+
+        with patch(
+            "secops_agent.ui.input_handler.shutil.get_terminal_size",
+            return_value=os.terminal_size((80, 14)),
+        ):
+            first = _show_ctrl_o_surface(memory, runtime, console)   # expand
+            self.assertEqual(first, "tool-output")
+            self.assertTrue(runtime.ctrl_o_anchor_is_expanded)
+            # Capped so tail + rendered fits (budget = 14 - 1 - 2 = 11).
+            self.assertLessEqual(runtime.ctrl_o_anchor_rendered_lines, 11)
+
+            second = _show_ctrl_o_surface(memory, runtime, console)  # collapse
+        self.assertEqual(second, "tool-output-collapsed")
+        self.assertFalse(runtime.ctrl_o_anchor_is_expanded)
 
     def test_ctrl_o_collapse_stays_silent_when_expanded_anchor_is_too_tall(self):
         runtime = RuntimeState()
