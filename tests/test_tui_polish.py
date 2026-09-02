@@ -3102,6 +3102,35 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("Summary", output)
         self.assertIn("new-file.txt", output)
 
+    def test_diff_patch_preview_colours_additions_green_removals_red(self):
+        if not shutil.which("git"):
+            self.skipTest("git is not installed")
+
+        old_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            def _g(*a):
+                subprocess.run(["git", *a], cwd=tmpdir, check=True, capture_output=True)
+            _g("init")
+            _g("config", "user.email", "x@example.com")
+            _g("config", "user.name", "x")
+            Path(tmpdir, "f.py").write_text("import os\nx = 1\n", encoding="utf-8")
+            _g("add", "-A")
+            _g("commit", "-m", "init")
+            Path(tmpdir, "f.py").write_text("import os\nx = 42\n", encoding="utf-8")
+
+            renderer = Renderer()
+            renderer.console = Console(width=80, record=True, force_terminal=True,
+                                       color_system="truecolor", file=io.StringIO())
+            try:
+                os.chdir(tmpdir)
+                renderer.render_diff()
+            finally:
+                os.chdir(old_cwd)
+
+        html = renderer.console.export_html(inline_styles=True).lower()
+        self.assertIn("#14311f", html)   # green background on the added line
+        self.assertIn("#3a1414", html)   # red background on the removed line
+
     def test_diff_render_non_git_matches_antigravity_warning_shape(self):
         if not shutil.which("git"):
             self.skipTest("git is not installed")

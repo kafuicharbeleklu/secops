@@ -2123,8 +2123,6 @@ class Renderer:
             preview = "\n".join(
                 part for part in (staged_diff.stdout, unstaged_diff.stdout) if part.strip()
             )
-            if preview.strip():
-                _append_lines(rows, "Patch", preview, limit=18)
 
             render_overlay(
                 self.console,
@@ -2132,8 +2130,36 @@ class Renderer:
                 rows,
                 footer="Shows status, stats, and a bounded patch preview for tracked files.",
             )
+            # Patch preview with Claude-Code diff colouring: additions on a green
+            # background, removals on a red background, hunk/file headers muted.
+            if preview.strip():
+                self._render_patch_preview(preview, limit=18)
         except Exception as exc:
             self.render_error(f"Unable to read diff: {exc}")
+
+    def _render_patch_preview(self, patch: str, limit: int = 18) -> None:
+        """Print a bounded git-patch preview with Claude-Code-style diff colouring:
+        + lines on a green background, - lines on a red background, hunk (@@) and
+        file headers in muted/accent tones, context lines dim."""
+        from secops_agent.ui.tool_display import _diff_bg
+
+        lines = [line.rstrip() for line in patch.expandtabs(4).splitlines() if line.strip()]
+        self.console.print(f"  [{COLORS['text_muted']}]Patch preview[/]")
+        for line in lines[:limit]:
+            body = escape(line[:180])
+            if line.startswith(("+++", "---", "diff --git", "index ", "new file", "deleted file")):
+                style = COLORS["text_muted"]
+            elif line.startswith("@@"):
+                style = f"bold {COLORS['accent']}"
+            elif line.startswith("+"):
+                style = f"{COLORS['success']} on {_diff_bg(True)}"
+            elif line.startswith("-"):
+                style = f"{COLORS['error']} on {_diff_bg(False)}"
+            else:
+                style = COLORS["text_dim"]
+            self.console.print(f"  [{style}]{body}[/]", no_wrap=True, overflow="ellipsis")
+        if len(lines) > limit:
+            self.console.print(f"  [{COLORS['text_dim']}]... {len(lines) - limit:,} more line(s) hidden[/]")
 
     def render_tasks(self, runtime: RuntimeState, interactive: bool = True):
         """Render background task state."""
