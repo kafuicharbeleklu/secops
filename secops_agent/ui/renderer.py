@@ -3424,24 +3424,24 @@ class Renderer:
             self.console.print(
                 f"{layout.INDENT_STR}[{COLORS['text_muted']}]Retry the same prompt, or /model to switch models.[/{COLORS['text_muted']}]"
             )
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
 
     def render_warning(self, message: str):
         """Render a compact command warning."""
         self.console.print(f"{layout.INDENT_STR}[{COLORS['warning']}]⎿  {message}[/{COLORS['warning']}]")
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
 
     def render_status(self, message: str):
         self.console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  {message}[/{COLORS['text_muted']}]")
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
 
     def render_success(self, message: str):
         self.console.print(f"{layout.INDENT_STR}[{COLORS['success']}]⎿  {message}[/{COLORS['success']}]")
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
 
     def render_command_result(self, message: str):
         self.console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  {message}[/{COLORS['text_muted']}]")
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
 
     def render_session_transcript(self, memory: Any, *, max_messages: int | None = None) -> None:
         """Replay a loaded session in the visible terminal transcript."""
@@ -3524,7 +3524,7 @@ class Renderer:
                 status="warning",
                 leading_blank=False,
             )
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
 
     def render_context(
         self,
@@ -3708,7 +3708,7 @@ class Renderer:
         call_text = format_tool_call_text(self._latest_tool_name, self._latest_tool_arguments)
         result = self._latest_tool_result
         indicator_color = _tool_status_color(status=_tool_result_status(result))
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
         collapse_hint = (
             f" [{COLORS['text_muted']}](ctrl+o to collapse)[/{COLORS['text_muted']}]"
             if result is None else ""
@@ -3738,7 +3738,7 @@ class Renderer:
         )
         rendered_lines += 1
         if len(lines) > 1:
-            self.console.print()
+            typography.emit(self.console, Boundary.SECTION_BREAK)
             self.console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
             rendered_lines += 2
             # Streaming ctrl+o expands *inline* with plain print + cursor-up clear.
@@ -3777,7 +3777,7 @@ class Renderer:
         if not self._latest_thought_content:
             return False
         duration = self._latest_thought_duration if self._latest_thought_duration is not None else "?"
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
         self.console.print(
             f"[{COLORS['accent']}]▾[/{COLORS['accent']}] "
             f"[{COLORS['text_muted']}]Thought for {duration}s[/{COLORS['text_muted']}]"
@@ -3830,7 +3830,7 @@ class Renderer:
         if not self._latest_thought_content:
             return False
         duration = self._latest_thought_duration if self._latest_thought_duration is not None else "?"
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
         self.console.print(
             f"[{COLORS['accent']}]▸[/{COLORS['accent']}] "
             f"[{COLORS['text_muted']}]Thought for {duration}s[/{COLORS['text_muted']}]"
@@ -3894,7 +3894,7 @@ class Renderer:
             self._thinking_content = ""
             return
 
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
 
         # agy renders the collapsed thought as "▸ Thought for Xs" then its content on
         # the next indented line (verified against live agy 2026-07-05), not inline.
@@ -4001,7 +4001,7 @@ class Renderer:
         if not actions:
             return
         max_show = int(self._display_prefs.get("max_suggestions", 5))
-        self.console.print()
+        typography.emit(self.console, Boundary.SECTION_BREAK)
         self.console.print(f"{layout.INDENT_STR}[{COLORS['text']}]Suggested next actions:[/{COLORS['text']}]")
         for index, action in enumerate(actions[:max_show], 1):
             tool_name = str(getattr(action, "tool_name", "") or "").strip()

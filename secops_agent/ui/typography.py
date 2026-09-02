@@ -36,7 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = [
     "INDENT", "RESULT_INDENT", "INDENT_STR", "RESULT_INDENT_STR", "indent",
-    "Boundary", "blanks_for", "emit",
+    "Boundary", "SPEC_TOKENS", "blanks_for", "emit",
     "normalize_text", "collapse_blank_lines",
 ]
 
@@ -65,8 +65,22 @@ class Boundary(enum.Enum):
     RESULT_TO_META = "result_to_meta"         # 0 — the ⎿ meta line immediately follows the result
     TRAILING_PROSE = "trailing_prose"         # 0 — no trailing blank at the end of a response
 
+    # Not a DESIGN_SPEC §2 token: a general 1-blank separator for transcript
+    # sections the seven tokens above do not name — a status/warning/error/success
+    # /command meta block, a ctrl+o expansion, the suggested-actions block, or the
+    # end of a replayed turn. Kept so every blank the response path emits routes
+    # through emit(), single-sourcing the count.
+    SECTION_BREAK = "section_break"           # 1
 
-# The one place the §2 blank-line counts are defined.
+
+# The seven DESIGN_SPEC §2 rhythm tokens (SECTION_BREAK is the code-level extra).
+SPEC_TOKENS = (
+    Boundary.BEFORE_TOOL_GROUP, Boundary.WITHIN_TOOL_GROUP, Boundary.AFTER_USER_TURN,
+    Boundary.BETWEEN_MD_BLOCKS, Boundary.WITHIN_MD_BLOCK, Boundary.RESULT_TO_META,
+    Boundary.TRAILING_PROSE,
+)
+
+# The one place the blank-line counts are defined.
 _BLANKS: dict[Boundary, int] = {
     Boundary.BEFORE_TOOL_GROUP: 1,
     Boundary.WITHIN_TOOL_GROUP: 0,
@@ -75,6 +89,7 @@ _BLANKS: dict[Boundary, int] = {
     Boundary.WITHIN_MD_BLOCK: 0,
     Boundary.RESULT_TO_META: 0,
     Boundary.TRAILING_PROSE: 0,
+    Boundary.SECTION_BREAK: 1,
 }
 
 

@@ -135,6 +135,16 @@ Le rythme vertical de Claude Code est **parcimonieux** : une ligne vide sépare 
 | `rhythm.result_to_meta`    | `0` ligne vide | La ligne méta suit immédiatement la ligne de résultat. |
 | `rhythm.trailing_prose`    | `0` ligne vide finale | Pas de ligne vide superflue en fin de réponse (pas de padding pleine largeur en fin de flux). |
 
+**Séparateur générique (`rhythm.section_break`, implémentation).** Toute émission
+de ligne vide du chemin de réponse passe par un unique émetteur
+(`typography.emit(console, Boundary)`), qui rend le compte exact de lignes vides —
+préservant la comptabilité ctrl+o. Les transitions que les 7 tokens §2 ne nomment
+pas (bloc méta *status/warning/error/success/command*, expansion ctrl+o, bloc
+*suggested actions*, fin d'un tour rejoué) utilisent `section_break` = `1` ligne
+vide. **Écart connu :** les blancs de fin de bloc méta et de fin de tour rejoué
+émettent `1` alors que `rhythm.trailing_prose` = `0` ; conservé tel quel et
+centralisé (pas encore corrigé), pour rester *behaviour-preserving*.
+
 ---
 
 ## 3. Règles de troncature et de repli (`fold.*`)

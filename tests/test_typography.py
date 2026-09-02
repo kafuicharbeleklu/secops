@@ -47,9 +47,20 @@ class RhythmTokenTests(unittest.TestCase):
         self.assertEqual(T.blanks_for(Boundary.RESULT_TO_META), 0)
         self.assertEqual(T.blanks_for(Boundary.TRAILING_PROSE), 0)
 
-    def test_all_seven_spec_tokens_present(self):
-        # Exactly the 7 DESIGN_SPEC §2 tokens, no more, no fewer.
-        self.assertEqual(len(list(Boundary)), 7)
+    def test_spec_tokens_are_exactly_the_seven(self):
+        # SPEC_TOKENS is exactly the 7 DESIGN_SPEC §2 tokens.
+        self.assertEqual(len(T.SPEC_TOKENS), 7)
+        self.assertEqual(set(T.SPEC_TOKENS), {
+            Boundary.BEFORE_TOOL_GROUP, Boundary.WITHIN_TOOL_GROUP,
+            Boundary.AFTER_USER_TURN, Boundary.BETWEEN_MD_BLOCKS,
+            Boundary.WITHIN_MD_BLOCK, Boundary.RESULT_TO_META, Boundary.TRAILING_PROSE,
+        })
+
+    def test_section_break_is_the_only_non_spec_boundary(self):
+        # The only Boundary beyond the 7 spec tokens is the generic section break.
+        extra = set(Boundary) - set(T.SPEC_TOKENS)
+        self.assertEqual(extra, {Boundary.SECTION_BREAK})
+        self.assertEqual(T.blanks_for(Boundary.SECTION_BREAK), 1)
 
     def _emit(self, boundary):
         console = Console(file=io.StringIO(), force_terminal=False, width=80)
