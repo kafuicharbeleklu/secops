@@ -3196,6 +3196,25 @@ class TUIPolishTests(unittest.TestCase):
         # The diff must render BEFORE the proceed line, i.e. at the gate, pre-write.
         self.assertLess(rendered.index("<?php"), rendered.index("Do you want to proceed?"))
 
+    def test_bold_markdown_emphasis_is_uncoloured(self):
+        # Claude-Code parity: **bold** is a plain bold attribute, no colour.
+        from secops_agent.ui.theme import RICH_STYLES
+
+        self.assertEqual(RICH_STYLES["markdown.strong"], "bold")
+
+    def test_write_diff_additions_use_a_green_background(self):
+        # Claude-Code parity: added lines render on a green background, not just a
+        # green foreground.
+        console = Console(width=88, record=True, force_terminal=True,
+                          color_system="truecolor", file=io.StringIO())
+        ToolResultBox.render(
+            console, "write_file",
+            ToolResult(success=True, output="",
+                       metadata={"content": "import os\nx = 1", "lines_added": 2}),
+        )
+        html = console.export_html(inline_styles=True).lower()
+        self.assertIn("#14311f", html)   # dark-green diff-add background
+
     def test_approval_prompt_uses_captured_agy_command_permission_copy(self):
         resource = PermissionResource(kind="command_prefix", name="pwd")
         lines = _approval_lines(

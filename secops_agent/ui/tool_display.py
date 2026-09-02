@@ -837,6 +837,17 @@ class ToolCallBox:
 
 # ── Tool Result Display ───────────────────────────────────────────────
 
+def _diff_bg(added: bool) -> str:
+    """Theme-aware background for a diff line (Claude-Code style): green for an
+    addition, red for a removal — a dark tint on the dark palettes, a light tint
+    on the light theme so the foreground stays readable."""
+    from secops_agent.ui.theme import active_theme_name, is_light_theme
+
+    if is_light_theme(active_theme_name()):
+        return "#dcfce7" if added else "#fee2e2"
+    return "#14311f" if added else "#3a1414"
+
+
 def _drop_trailing_zero_exit(output: str) -> str:
     """Drop a trailing ``[Exit Code: 0]`` trailer for the collapsed summary.
 
@@ -971,17 +982,20 @@ class ToolResultBox:
                 emit(
                     f"  [{COLORS['text_muted']}]⎿  {summary_verb} {n_lines} {line_label}[/{COLORS['text_muted']}]"
                 )
-                # Show up to 6 content lines with real line numbers and + prefix
+                # Show up to 6 content lines with real line numbers and a "+" prefix
+                # on a green background (Claude-Code diff style).
                 max_display = min(6, len(content_lines))
                 safe_width = max(24, min(120, console.width - 14))
+                add_style = f"{COLORS['success']} on {_diff_bg(True)}"
                 for idx, content_line in enumerate(content_lines[:max_display]):
                     line_no = idx + 1
                     display_line = content_line.rstrip()
                     if len(display_line) > safe_width:
                         display_line = display_line[:safe_width - 3] + "..."
+                    pad = " " * max(0, safe_width - len(display_line))
                     emit(
                         f"     [{COLORS['text_muted']}]{line_no:>4}[/{COLORS['text_muted']}] "
-                        f"[{COLORS['success']}]+    {escape(display_line)}[/{COLORS['success']}]"
+                        f"[{add_style}]+  {escape(display_line)}{pad}[/]"
                     )
                 if len(content_lines) > max_display:
                     emit(

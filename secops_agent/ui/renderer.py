@@ -73,6 +73,12 @@ from secops_agent.ui.sudo_prompt import request_sudo_authentication
 # Throttle: re-render Markdown at most every 50ms to prevent flashing
 _RENDER_INTERVAL = 0.05  # seconds
 
+# Fenced code blocks get vivid, truecolor, per-token syntax highlighting (like
+# Claude Code) instead of the flat ANSI palette, whose dark-blue keywords are
+# near-invisible on a dark ground. Override via SECOPS_CODE_THEME (any Pygments
+# theme name, e.g. dracula / one-dark / nord).
+_CODE_THEME = os.environ.get("SECOPS_CODE_THEME", "").strip() or "monokai"
+
 _TOOL_TASK_TRACKING_NAMES = {
     "run_shell",
     "nmap_scan",
@@ -311,7 +317,7 @@ def _build_text_transcript_lines(content: str, *, width: int) -> list[str]:
         color_system=None,
         file=io.StringIO(),
     )
-    rendered.print(Padding(Markdown(normalize_agent_markdown(content), code_theme="ansi_dark"), (0, 0, 0, 2)))
+    rendered.print(Padding(Markdown(normalize_agent_markdown(content), code_theme=_CODE_THEME), (0, 0, 0, 2)))
     return [line.rstrip() for line in rendered.export_text().splitlines()]
 
 
@@ -3297,7 +3303,7 @@ class Renderer:
                     self.console.print(
                         _StripTrailingWhitespace(
                             Padding(
-                                Markdown(normalize_agent_markdown(content), code_theme="ansi_dark"),
+                                Markdown(normalize_agent_markdown(content), code_theme=_CODE_THEME),
                                 (0, 0, 0, 2),
                             )
                         )
@@ -3885,7 +3891,7 @@ class Renderer:
         def _build_display(text: str):
             """Build Antigravity-style indented Markdown display."""
             return Padding(
-                Markdown(normalize_agent_markdown(text), code_theme="ansi_dark"),
+                Markdown(normalize_agent_markdown(text), code_theme=_CODE_THEME),
                 (0, 0, 0, 2),
             )
 

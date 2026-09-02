@@ -157,7 +157,16 @@ def _build_rich_styles(colors: dict) -> dict:
         "warning": f"bold {colors['warning']}",
         "markdown.code": f"bold {colors['accent_bright']}",
         "markdown.code_block": colors["text"],
-        "markdown.strong": f"bold {colors['accent_bright']}",
+        # **bold** is a plain bold attribute with no colour, matching Claude Code
+        # (colour is a signal reserved for headings / code / status, not emphasis).
+        "markdown.strong": "bold",
+        "markdown.emph": "italic",
+        "markdown.item.bullet": f"bold {colors['accent']}",
+        "markdown.item.number": f"bold {colors['accent']}",
+        "markdown.block_quote": colors["text_muted"],
+        "markdown.hr": colors["text_dim"],
+        "markdown.link": colors["accent"],
+        "markdown.link_url": f"underline {colors['text_muted']}",
         "markdown.h1": f"bold {colors['accent_bright']}",
         "markdown.h2": f"bold {colors['accent']}",
         "markdown.h3": f"bold {colors['accent']}",
