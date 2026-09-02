@@ -19,6 +19,7 @@ from secops_agent import __version__
 from secops_agent.ui.theme import COLORS, friendly_model_name
 from secops_agent.ui.commands import iter_commands
 from secops_agent.ui.runtime import RuntimeState
+from secops_agent.ui import layout
 from secops_agent.ui.spool_display import supervised_detail_text
 from secops_agent.ui.views.common import (
     SettingsItem,
@@ -129,15 +130,15 @@ def build_settings_view_lines(
     label_width = min(24, max((len(item.label) for item in visible), default=12) + 2)
     value_width = max(8, width - label_width - 4)
 
-    search_label = f"  Search: {search_query}" if search_query else "  Search:"
+    search_label = f"{layout.INDENT_STR}Search: {search_query}" if search_query else f"{layout.INDENT_STR}Search:"
     lines = ["", "Settings", "", search_label, " ────────────────────", ""]
     if not filtered_items:
-        lines.append("  No settings match.")
+        lines.append(f"{layout.INDENT_STR}No settings match.")
     for index, item in enumerate(visible, start=start):
         cursor = "> " if index == selected else "  "
         label = _fit_cell(item.label, label_width).ljust(label_width)
         if editing_index == index:
-            lines.append(f"  {_fit_cell(item.label, label_width).rstrip()}")
+            lines.append(f"{layout.INDENT_STR}{_fit_cell(item.label, label_width).rstrip()}")
             options = item.options or (item.value,)
             for option_index, option in enumerate(options):
                 option_cursor = "  > " if option_index == edit_selected else "    "
@@ -150,13 +151,13 @@ def build_settings_view_lines(
         hidden_above = start
         hidden_below = max(0, len(filtered_items) - start - len(visible))
         if hidden_above:
-            lines.append(f"  ↑ {hidden_above} more")
+            lines.append(f"{layout.INDENT_STR}↑ {hidden_above} more")
         if hidden_below:
-            lines.append(f"  ↓ {hidden_below} more")
+            lines.append(f"{layout.INDENT_STR}↓ {hidden_below} more")
 
     if filtered_items:
         lines.append("")
-        lines.append(f"  {_fit_cell(filtered_items[selected].description, max(24, width - 4))}")
+        lines.append(f"{layout.INDENT_STR}{_fit_cell(filtered_items[selected].description, max(24, width - 4))}")
 
     lines.append("")
     active_footer = "↑/↓ Navigate · enter Select" if editing_index is not None else footer
@@ -416,22 +417,22 @@ def build_mcp_view_lines(
 
     lines = ["", "MCP Servers", ""]
     if show_summary:
-        lines.append(f"  {len(servers)} configured · {len(enabled)} enabled · {running} running · {tools} tools")
+        lines.append(f"{layout.INDENT_STR}{len(servers)} configured · {len(enabled)} enabled · {running} running · {tools} tools")
         lines.append("")
 
     for index, item in enumerate(visible, start=start):
         cursor = "> " if index == selected else "  "
         lines.append(_fit_cell(f"{cursor}{item.label}", width))
         if item.detail:
-            lines.append(_fit_cell(f"  {item.detail}", width))
+            lines.append(_fit_cell(f"{layout.INDENT_STR}{item.detail}", width))
 
     if len(items) > visible_count:
         hidden_above = start
         hidden_below = max(0, len(items) - start - len(visible))
         if hidden_above:
-            lines.append(f"  ↑ {hidden_above} more")
+            lines.append(f"{layout.INDENT_STR}↑ {hidden_above} more")
         if hidden_below:
-            lines.append(f"  ↓ {hidden_below} more")
+            lines.append(f"{layout.INDENT_STR}↓ {hidden_below} more")
 
     lines.append("")
     lines.append(_fit_cell(footer, width))
@@ -524,22 +525,22 @@ def build_skills_view_lines(
 
     lines = ["", "Skills", ""]
     if show_summary:
-        lines.append(f"  {len(skills)} loaded · {workspace_count} workspace · {global_count} global")
+        lines.append(f"{layout.INDENT_STR}{len(skills)} loaded · {workspace_count} workspace · {global_count} global")
         lines.append("")
 
     for index, item in enumerate(visible, start=start):
         cursor = "> " if index == selected else "  "
         lines.append(_fit_cell(f"{cursor}{item.label}", width))
         if item.detail:
-            lines.append(_fit_cell(f"  {item.detail}", width))
+            lines.append(_fit_cell(f"{layout.INDENT_STR}{item.detail}", width))
 
     if len(items) > visible_count:
         hidden_above = start
         hidden_below = max(0, len(items) - start - len(visible))
         if hidden_above:
-            lines.append(f"  ↑ {hidden_above} more")
+            lines.append(f"{layout.INDENT_STR}↑ {hidden_above} more")
         if hidden_below:
-            lines.append(f"  ↓ {hidden_below} more")
+            lines.append(f"{layout.INDENT_STR}↓ {hidden_below} more")
 
     lines.append("")
     lines.append(_fit_cell(footer, width))
@@ -611,13 +612,13 @@ def build_artifacts_view_lines(
     finding_summary: list[str] = []
     if finding_artifacts:
         finding_summary.append("")
-        finding_summary.append(f"  Findings ({len(finding_artifacts)})")
+        finding_summary.append(f"{layout.INDENT_STR}Findings ({len(finding_artifacts)})")
         for artifact in finding_artifacts[:6]:
             severity = str((getattr(artifact, "metadata", {}) or {}).get("severity", "")).strip()
             tag = f"[{severity}] " if severity else ""
-            finding_summary.append(_fit_cell(f"    • {tag}{artifact.title}", width))
+            finding_summary.append(_fit_cell(f"{layout.INDENT_STR * 2}• {tag}{artifact.title}", width))
         if len(finding_artifacts) > 6:
-            finding_summary.append(f"    … and {len(finding_artifacts) - 6} more")
+            finding_summary.append(f"{layout.INDENT_STR * 2}… and {len(finding_artifacts) - 6} more")
 
     fixed_rows = 5 + (7 if has_detail else 0) + len(finding_summary)
     visible_count = min(len(artifacts), max(1, height - fixed_rows))
@@ -627,21 +628,21 @@ def build_artifacts_view_lines(
     lines = ["", title]
     lines.extend(finding_summary)
     if not artifacts:
-        lines.append(f"  {empty_message}")
+        lines.append(f"{layout.INDENT_STR}{empty_message}")
     else:
         lines.append("")
         for index, artifact in enumerate(visible, start=start):
             cursor = "> " if index == selected else "  "
             lines.append(_fit_cell(f"{cursor}{artifact.id:<6} {artifact.title}", width))
-            lines.append(_fit_cell(f"  {_artifact_row_detail(artifact)}", width))
+            lines.append(_fit_cell(f"{layout.INDENT_STR}{_artifact_row_detail(artifact)}", width))
 
         if len(artifacts) > visible_count:
             hidden_above = start
             hidden_below = max(0, len(artifacts) - start - len(visible))
             if hidden_above:
-                lines.append(f"  ↑ {hidden_above} more")
+                lines.append(f"{layout.INDENT_STR}↑ {hidden_above} more")
             if hidden_below:
-                lines.append(f"  ↓ {hidden_below} more")
+                lines.append(f"{layout.INDENT_STR}↓ {hidden_below} more")
 
     if has_detail:
         artifact = artifacts[selected]
@@ -651,24 +652,24 @@ def build_artifacts_view_lines(
                 [
                     "",
                     f"Preview: {artifact.id} · {artifact.title}",
-                    f"  Kind: {artifact.kind}",
-                    f"  Source: {_artifact_source_label(artifact)}",
+                    f"{layout.INDENT_STR}Kind: {artifact.kind}",
+                    f"{layout.INDENT_STR}Source: {_artifact_source_label(artifact)}",
                 ]
             )
             if preview_line:
-                lines.append(f"  {preview_line}")
+                lines.append(f"{layout.INDENT_STR}{preview_line}")
         else:
             lines.extend(
                 [
                     "",
                     f"Open: {artifact.id} · {artifact.title}",
-                    f"  Kind: {artifact.kind}",
-                    f"  Source: {_artifact_source_label(artifact)}",
+                    f"{layout.INDENT_STR}Kind: {artifact.kind}",
+                    f"{layout.INDENT_STR}Source: {_artifact_source_label(artifact)}",
                     "",
-                    "  Content:",
+                    f"{layout.INDENT_STR}Content:",
                 ]
             )
-            lines.extend(_fit_cell(f"    {line}", width) for line in _artifact_content_lines(artifact, max_lines=12))
+            lines.extend(_fit_cell(f"{layout.INDENT_STR * 2}{line}", width) for line in _artifact_content_lines(artifact, max_lines=12))
 
     lines.append("")
     lines.append(_fit_cell(footer, width))
@@ -763,7 +764,7 @@ def build_agents_view_lines(
     lines = [
         "",
         "Create New Agents",
-        f"  Workspace: {_display_path(workspace_template)}",
+        f"{layout.INDENT_STR}Workspace: {_display_path(workspace_template)}",
         _display_path(user_template),
         "",
     ]
@@ -786,13 +787,13 @@ def build_agents_view_lines(
             hidden_above = start
             hidden_below = max(0, len(entries) - start - len(visible_entries))
             if hidden_above:
-                lines.append(f"  ↑ {hidden_above} more")
+                lines.append(f"{layout.INDENT_STR}↑ {hidden_above} more")
             if hidden_below:
-                lines.append(f"  ↓ {hidden_below} more")
+                lines.append(f"{layout.INDENT_STR}↓ {hidden_below} more")
         if active_task_count == 0:
-            lines.extend(["", "  No background subagents are active."])
+            lines.extend(["", f"{layout.INDENT_STR}No background subagents are active."])
         if profile_count == 0:
-            lines.append("  No configured agent profiles.")
+            lines.append(f"{layout.INDENT_STR}No configured agent profiles.")
 
     lines.append("")
     lines.append(_fit_cell(footer, width))
@@ -1060,7 +1061,7 @@ def _tools_for_view(tools_list: list[Any], active_view: str | int = 0) -> list[A
 
 
 def _tools_tab_line(tabs: list[str], active_index: int, width: int, *, framed: bool = False) -> str:
-    prefix = "  SecOps Tools   " if framed else "SecOps Tools   "
+    prefix = f"{layout.INDENT_STR}SecOps Tools   " if framed else "SecOps Tools   "
     suffix = "   (←/→ or tab to cycle)"
     available = max(8, width - len(prefix) - len(suffix))
     if available < 22:
@@ -1129,7 +1130,7 @@ def build_tools_view_lines(
     visible = rows[start : start + visible_count]
 
     if not rows:
-        lines.append("  No tools registered.")
+        lines.append(f"{layout.INDENT_STR}No tools registered.")
     else:
         active_tab = tabs[active_index] if tabs else "all"
         for index, tool in enumerate(visible, start=start):
@@ -1145,7 +1146,7 @@ def build_tools_view_lines(
 
     if len(rows) > visible_count:
         end = start + len(visible)
-        lines.append(f"  [{start + 1}-{end} of {len(rows)} tools]")
+        lines.append(f"{layout.INDENT_STR}[{start + 1}-{end} of {len(rows)} tools]")
 
     while fill and len(lines) < height - 2:
         lines.append("")
@@ -1178,7 +1179,7 @@ def build_help_view_lines(
         ]
     else:
         tab_parts = [view.lower() for view in _HELP_VIEWS]
-    tab_prefix = "  SecOps CLI" if framed else "SecOps CLI"
+    tab_prefix = f"{layout.INDENT_STR}SecOps CLI" if framed else "SecOps CLI"
     tab_line = tab_prefix + "   " + "    ".join(tab_parts) + "   (←/→ or tab to cycle)"
 
     item_total = _help_list_total(groups, active_index)
@@ -1207,17 +1208,17 @@ def build_help_view_lines(
     count_window = _help_count_window(active_index, offset, len(visible_items), total)
     if count_window:
         start, end, count_total = count_window
-        lines.append(f"  [{start}-{end} of {count_total} items]")
+        lines.append(f"{layout.INDENT_STR}[{start}-{end} of {count_total} items]")
     elif total > visible_count:
         start = offset + 1
         end = offset + len(visible_items)
-        lines.append(f"  [{start}-{end} of {total} items]")
+        lines.append(f"{layout.INDENT_STR}[{start}-{end} of {total} items]")
 
     while fill and len(lines) < height - 2:
         lines.append("")
     if framed:
         lines.append(divider)
-    lines.append("  Keyboard: ↑/↓ Navigate  ←/→ Switch View  esc Close")
+    lines.append(f"{layout.INDENT_STR}Keyboard: ↑/↓ Navigate  ←/→ Switch View  esc Close")
     return [_fit_cell(line, width) for line in lines[:height]]
 
 

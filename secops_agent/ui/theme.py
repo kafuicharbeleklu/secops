@@ -411,11 +411,11 @@ def get_header_banner(model_name: str = "gemini-2.5-flash") -> str:
     if width < logo_width + len(gap) + _MIN_META:
         divider = f"{ansi('text_dim')}{'─' * max(1, width - 1)}{reset}"
         banner = (
-            f"  {ansi('accent', bold=True)}SECOPS{reset} {ansi('accent', bold=True)}{title}{reset}\n"
+            f"{layout.INDENT_STR}{ansi('accent', bold=True)}SECOPS{reset} {ansi('accent', bold=True)}{title}{reset}\n"
             f"{divider}\n"
-            f"  Modèle  : {ansi('text_muted')}{_fit_text(friendly, max(1, width - 12))}{reset}\n"
-            f"  Session : {ansi('text_muted')}{_fit_text(session_label, max(1, width - 12))}{reset}\n"
-            f"  CWD     : {ansi('text_muted')}{_fit_text(cwd, max(1, width - 12))}{reset}\n"
+            f"{layout.INDENT_STR}Modèle  : {ansi('text_muted')}{_fit_text(friendly, max(1, width - 12))}{reset}\n"
+            f"{layout.INDENT_STR}Session : {ansi('text_muted')}{_fit_text(session_label, max(1, width - 12))}{reset}\n"
+            f"{layout.INDENT_STR}CWD     : {ansi('text_muted')}{_fit_text(cwd, max(1, width - 12))}{reset}\n"
             f"{divider}"
         )
         return banner

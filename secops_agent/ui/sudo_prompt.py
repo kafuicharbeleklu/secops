@@ -18,6 +18,7 @@ from secops_agent.core.sudo import (
     can_prompt_for_sudo,
 )
 from secops_agent.ui.theme import COLORS
+from secops_agent.ui import layout
 
 
 async def request_sudo_authentication(
@@ -37,14 +38,14 @@ async def request_sudo_authentication(
         display_command = display_command[:119] + "…"
     console.print()
     console.print(
-        f"  [{COLORS['warning']}]Sudo authentication required[/{COLORS['warning']}]"
+        f"{layout.INDENT_STR}[{COLORS['warning']}]Sudo authentication required[/{COLORS['warning']}]"
     )
     if display_command:
-        console.print(f"  [{COLORS['text_muted']}]Command: {escape(display_command)}[/{COLORS['text_muted']}]")
+        console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]Command: {escape(display_command)}[/{COLORS['text_muted']}]")
     if reason:
-        console.print(f"  [{COLORS['text_muted']}]Reason: {escape(reason)}[/{COLORS['text_muted']}]")
+        console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]Reason: {escape(reason)}[/{COLORS['text_muted']}]")
     console.print(
-        f"  [{COLORS['text_dim']}]Password is used locally for sudo -v and is not sent to the model or saved.[/{COLORS['text_dim']}]"
+        f"{layout.INDENT_STR}[{COLORS['text_dim']}]Password is used locally for sudo -v and is not sent to the model or saved.[/{COLORS['text_dim']}]"
     )
 
     return await authenticate_sudo_with_password(getpass.getpass)

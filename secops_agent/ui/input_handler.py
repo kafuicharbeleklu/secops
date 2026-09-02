@@ -633,7 +633,7 @@ def _toggle_anchored_ctrl_o_surface(runtime: Any | None, console: Any | None) ->
             keep = max(1, budget - 1)
             hidden = len(next_lines) - keep
             note = (
-                f"     [{COLORS['text_muted']}]... {hidden:,} more lines — "
+                f"{layout.RESULT_INDENT_STR}[{COLORS['text_muted']}]... {hidden:,} more lines — "
                 f"/trajectory for the full output[/{COLORS['text_muted']}]"
             )
             next_lines = next_lines[:keep] + [note]
@@ -653,7 +653,7 @@ def _toggle_anchored_ctrl_o_surface(runtime: Any | None, console: Any | None) ->
         ):
             if not bool(getattr(runtime, "ctrl_o_anchor_too_tall_notified", False)):
                 console.print(
-                    f"  [{COLORS['text_muted']}]⎿  Output too tall to expand here — "
+                    f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  Output too tall to expand here — "
                     f"/trajectory for the full view[/{COLORS['text_muted']}]"
                 )
                 # Count the hint so the anchored bookkeeping stays aligned.
@@ -734,20 +734,20 @@ def _render_expanded_tool_output(console: Any, artifact: Any) -> int:
     first_line = _fit_text(lines[0], max(1, width - 34))
     console.print()
     console.print(
-        f"  [{COLORS['text_muted']}]⎿  {escape(first_line)} "
+        f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  {escape(first_line)} "
         f"(ctrl+o to collapse)[/{COLORS['text_muted']}]"
     )
     rendered_lines = 2
     if len(lines) > 1:
         console.print()
-        console.print(f"  [{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
+        console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
         rendered_lines += 2
         visible_lines = lines[:_ctrl_o_output_visible_limit()]
         for line in visible_lines:
-            console.print(f"    [{COLORS['text_muted']}]{escape(_fit_text(line, max(1, width - 6)))}[/{COLORS['text_muted']}]")
+            console.print(f"{layout.INDENT_STR * 2}[{COLORS['text_muted']}]{escape(_fit_text(line, max(1, width - 6)))}[/{COLORS['text_muted']}]")
         rendered_lines += len(visible_lines)
         if len(lines) > len(visible_lines):
-            console.print(f"    [{COLORS['text_muted']}]... {len(lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_muted']}]")
+            console.print(f"{layout.INDENT_STR * 2}[{COLORS['text_muted']}]... {len(lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_muted']}]")
             rendered_lines += 1
     return rendered_lines
 
@@ -1292,7 +1292,7 @@ class InputHandler:
 
             # Line 1: Key guides with exact Unicode arrows and 2-space indentation
             line1 = [
-                ("class:toolbar_left", "  "),
+                ("class:toolbar_left", layout.INDENT_STR),
                 ("class:toolbar_key", "↑/↓"),
                 ("class:toolbar_action", " Navigate · "),
                 ("class:toolbar_key", "enter"),

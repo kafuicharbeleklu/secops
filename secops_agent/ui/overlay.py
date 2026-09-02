@@ -16,6 +16,7 @@ from typing import Callable, Iterable, Optional
 from rich.console import Console
 
 from secops_agent.ui.theme import ANSI_RESET, COLORS, ansi
+from secops_agent.ui import layout
 
 
 @dataclass(frozen=True)
@@ -228,7 +229,7 @@ def build_choice_overlay_lines(
     height = max(10, height)
     detail_lines = detail_lines or []
     if not choices:
-        return [_fit(line, width) for line in ["", title, "", "  No choices.", "", footer]]
+        return [_fit(line, width) for line in ["", title, "", f"{layout.INDENT_STR}No choices.", "", footer]]
 
     selected = min(max(0, selected), len(choices) - 1)
     visible_limit = CHOICE_LIST_VISIBLE_ITEMS if visible_items is None else max(1, int(visible_items))
@@ -240,7 +241,7 @@ def build_choice_overlay_lines(
     hidden_above = start
     hidden_below = max(0, len(choices) - start - len(visible))
     if hidden_above:
-        lines.append(f"  ↑ {hidden_above} more")
+        lines.append(f"{layout.INDENT_STR}↑ {hidden_above} more")
 
     label_width = 0
     if show_descriptions:
@@ -266,12 +267,12 @@ def build_choice_overlay_lines(
             lines.append(f"{cursor}{_fit(text, row_width)}")
 
     if hidden_below:
-        lines.append(f"  ↓ {hidden_below} more")
+        lines.append(f"{layout.INDENT_STR}↓ {hidden_below} more")
 
     if detail_lines:
         lines.append("")
         for line in detail_lines[:4]:
-            lines.append(f"  {_fit(line, max(24, width - 4))}")
+            lines.append(f"{layout.INDENT_STR}{_fit(line, max(24, width - 4))}")
 
     lines.append("")
     lines.append(_fit(footer, width))
@@ -296,7 +297,7 @@ def build_theme_picker_lines(
 
     names = list(theme.available_themes())
     if not names:
-        return ["", _fit("Choose a theme", max(1, width - 1)), "", "  No themes.", ""]
+        return ["", _fit("Choose a theme", max(1, width - 1)), "", f"{layout.INDENT_STR}No themes.", ""]
 
     selected = min(max(0, selected), len(names) - 1)
     W = max(20, width - 1)
@@ -327,7 +328,7 @@ def build_theme_picker_lines(
             visible += len(text) + 2
         if visible < preview_width:
             inner += " " * (preview_width - visible)
-        return "  " + bg + inner + reset
+        return layout.INDENT_STR + bg + inner + reset
 
     lines.append("")
     lines.append(band([
@@ -357,12 +358,12 @@ def render_overlay(
 
     console.print()
     console.print(f"[{COLORS['text_dim']}]{divider}[/]")
-    console.print(f"  [{COLORS['accent']} bold]{title}[/]")
+    console.print(f"{layout.INDENT_STR}[{COLORS['accent']} bold]{title}[/]")
     console.print(f"[{COLORS['text_dim']}]{divider}[/]")
 
     if not materialized:
         if empty_message:
-            console.print(f"  [{COLORS['text_dim']}]{empty_message}[/]")
+            console.print(f"{layout.INDENT_STR}[{COLORS['text_dim']}]{empty_message}[/]")
     else:
         label_width = min(22, max(len(row.label) for row in materialized) + 2)
         value_width = max(12, width - label_width - 6)
@@ -371,15 +372,15 @@ def render_overlay(
             label = _fit(row.label, max(1, label_width - 1)).ljust(label_width)
             value = _fit(row.value, value_width)
             console.print(
-                f"  [{COLORS['text_muted']}]{label}[/]"
+                f"{layout.INDENT_STR}[{COLORS['text_muted']}]{label}[/]"
                 f"[{color}]{value}[/]"
             )
             if row.description:
-                console.print(f"    [{COLORS['text_dim']}]{_fit(row.description, width - 4)}[/]")
+                console.print(f"{layout.INDENT_STR * 2}[{COLORS['text_dim']}]{_fit(row.description, width - 4)}[/]")
 
     if footer:
         console.print(f"[{COLORS['text_dim']}]{divider}[/]")
-        console.print(f"  [{COLORS['text_muted']}]{_fit(footer, width - 4)}[/]")
+        console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]{_fit(footer, width - 4)}[/]")
     console.print()
 
 
@@ -664,7 +665,7 @@ def view_logs_overlay(title: str, content: str, *, initial_search: str = "") -> 
         divider = f"{c_dim}{'─' * line_width}{reset}\n"
         sys.stdout.write("\x1b[H\x1b[2J")
         sys.stdout.write(divider)
-        sys.stdout.write(f"  {c_accent}{title}{reset}\n")
+        sys.stdout.write(f"{layout.INDENT_STR}{c_accent}{title}{reset}\n")
         sys.stdout.write(divider)
         sys.stdout.write("\n")
 
@@ -679,7 +680,7 @@ def view_logs_overlay(title: str, content: str, *, initial_search: str = "") -> 
 
         visible = wrapped_lines[selected:selected + content_height]
         for line in visible:
-            sys.stdout.write(f"  {line}{reset}\n")
+            sys.stdout.write(f"{layout.INDENT_STR}{line}{reset}\n")
         
         # Remplir de lignes vides pour garder l'alignement de la bordure du bas
         if len(visible) < content_height:
@@ -700,7 +701,7 @@ def view_logs_overlay(title: str, content: str, *, initial_search: str = "") -> 
         if spaces < 2:
             spaces = 2
         
-        sys.stdout.write(f"  {c_muted}{controls}{' ' * spaces}{status}{reset}\n")
+        sys.stdout.write(f"{layout.INDENT_STR}{c_muted}{controls}{' ' * spaces}{status}{reset}\n")
         sys.stdout.write(divider)
         sys.stdout.flush()
 

@@ -13,6 +13,7 @@ from typing import Callable
 
 from secops_agent.ui.overlay import read_terminal_key
 from secops_agent.ui.theme import ANSI_RESET, ansi
+from secops_agent.ui import layout
 
 
 @dataclass(frozen=True)
@@ -63,16 +64,16 @@ def build_panel_lines(
     height = max(10, height)
     detail_lines = detail_lines or []
     divider = "─" * width
-    lines = [divider, f"  {_fit(title, width - 4)}", divider]
+    lines = [divider, f"{layout.INDENT_STR}{_fit(title, width - 4)}", divider]
 
     content_height = max(5, height - 6)
     if not rows:
         lines.append("")
-        lines.append(f"  {_fit(empty_message or 'No items.', width - 4)}")
+        lines.append(f"{layout.INDENT_STR}{_fit(empty_message or 'No items.', width - 4)}")
         while len(lines) < height - 2:
             lines.append("")
         lines.append(divider)
-        lines.append(f"  {_fit(footer, width - 4)}" if footer else divider)
+        lines.append(f"{layout.INDENT_STR}{_fit(footer, width - 4)}" if footer else divider)
         return [_fit(line, width) for line in lines[:height]]
 
     selected = min(max(0, selected), len(rows) - 1)
@@ -94,10 +95,10 @@ def build_panel_lines(
             left = ""
 
         right = _fit(detail_lines[offset], detail_width) if offset < len(detail_lines) else ""
-        lines.append(f"  {left:<{list_width}}{' ' * gap_width}{right}")
+        lines.append(f"{layout.INDENT_STR}{left:<{list_width}}{' ' * gap_width}{right}")
 
     lines.append(divider)
-    lines.append(f"  {_fit(footer, width - 4)}" if footer else divider)
+    lines.append(f"{layout.INDENT_STR}{_fit(footer, width - 4)}" if footer else divider)
     return [_fit(line, width) for line in lines[:height]]
 
 

@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from secops_agent.ui.theme import COLORS
+from secops_agent.ui import layout
 
 
 class ErrorCategory(str, Enum):
@@ -101,14 +102,14 @@ class ErrorRenderer:
             category = classify_error(message)
 
         prefix = f"{tool_name}: " if tool_name else ""
-        console.print(f"  [{COLORS['error']}]⎿  {escape(prefix + message)}[/{COLORS['error']}]")
+        console.print(f"{layout.INDENT_STR}[{COLORS['error']}]⎿  {escape(prefix + message)}[/{COLORS['error']}]")
 
         # Find and display suggestion
         if not suggestion:
             suggestion = _find_suggestion(category, message)
         if suggestion:
             console.print(
-                f"     [{COLORS['text_muted']}]{suggestion}[/{COLORS['text_muted']}]"
+                f"{layout.RESULT_INDENT_STR}[{COLORS['text_muted']}]{suggestion}[/{COLORS['text_muted']}]"
             )
 
     @staticmethod
@@ -123,11 +124,11 @@ class ErrorRenderer:
 
         time_str = f" ({format_duration(execution_time)})" if execution_time > 0 else ""
         console.print(
-            f"  [{COLORS['error']}]⎿  {tool_name} failed{time_str}: {message}[/{COLORS['error']}]"
+            f"{layout.INDENT_STR}[{COLORS['error']}]⎿  {tool_name} failed{time_str}: {message}[/{COLORS['error']}]"
         )
 
         suggestion = _find_suggestion(classify_error(message), message)
         if suggestion:
             console.print(
-                f"     [{COLORS['text_muted']}]{suggestion}[/{COLORS['text_muted']}]"
+                f"{layout.RESULT_INDENT_STR}[{COLORS['text_muted']}]{suggestion}[/{COLORS['text_muted']}]"
             )

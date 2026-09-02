@@ -275,7 +275,7 @@ def highlight_terms(text: str, terms: list[str], style: str) -> str:
 def _build_expanded_tool_result_lines(result: Any, *, width: int, terms: list[str] | None = None) -> list[str]:
     output_lines = _tool_output_lines(result)
     first = _fit_cell(_result_headline(result, output_lines[0]), max(16, width - 34))
-    lines = [f"  [{COLORS['text_muted']}]⎿  {escape(first)} (ctrl+o to collapse)[/{COLORS['text_muted']}]"]
+    lines = [f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  {escape(first)} (ctrl+o to collapse)[/{COLORS['text_muted']}]"]
     if len(output_lines) > 1:
         visible_limit = _ctrl_o_output_visible_limit()
         visible_lines = output_lines[:visible_limit]
@@ -286,13 +286,13 @@ def _build_expanded_tool_result_lines(result: Any, *, width: int, terms: list[st
             return highlight_terms(fitted, terms, match_style) if terms else escape(fitted)
 
         lines.append("")
-        lines.append(f"  [{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
+        lines.append(f"{layout.INDENT_STR}[{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
         lines.extend(
-            f"    [{COLORS['text_muted']}]{_render(line)}[/{COLORS['text_muted']}]"
+            f"{layout.INDENT_STR * 2}[{COLORS['text_muted']}]{_render(line)}[/{COLORS['text_muted']}]"
             for line in visible_lines
         )
         if len(output_lines) > len(visible_lines):
-            lines.append(f"    [{COLORS['text_muted']}]... {len(output_lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_muted']}]")
+            lines.append(f"{layout.INDENT_STR * 2}[{COLORS['text_muted']}]... {len(output_lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_muted']}]")
     return lines
 
 
@@ -440,7 +440,7 @@ def _build_ctrl_o_transcript_lines(items: list[dict[str, Any]], *, expanded: boo
             if preview:
                 if len(preview) > 120:
                     preview = preview[:117] + "..."
-                lines.append(f"  [{COLORS['text_dim']}]{escape(preview)}[/{COLORS['text_dim']}]")
+                lines.append(f"{layout.INDENT_STR}[{COLORS['text_dim']}]{escape(preview)}[/{COLORS['text_dim']}]")
         elif kind == "tool":
             lines.append("")
             result = item.get("result")
@@ -2238,7 +2238,7 @@ class Renderer:
         add_bg, del_bg = _diff_bg(True), _diff_bg(False)
         pad_w = max(24, min(120, _surface_width(self.console) - 6))
         raw = [line.rstrip() for line in patch.expandtabs(4).splitlines() if line.strip()]
-        self.console.print(f"  [{COLORS['text_muted']}]Patch preview[/]")
+        self.console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]Patch preview[/]")
 
         def _kind(line: str) -> str:
             if line.startswith(("+++", "---", "diff --git", "index ", "new file", "deleted file")):
@@ -2291,13 +2291,13 @@ class Renderer:
                 style = f"{COLORS['success']} on {add_bg}"
             else:
                 style = COLORS["text_dim"]
-            self.console.print(f"  [{style}]{body}[/]", no_wrap=True, overflow="ellipsis")
+            self.console.print(f"{layout.INDENT_STR}[{style}]{body}[/]", no_wrap=True, overflow="ellipsis")
             emitted += 1
             index += 1
 
         if truncated or index < total:
             hidden = len([line for line in raw[index:] if line.strip()]) if index < total else 0
-            self.console.print(f"  [{COLORS['text_dim']}]... {max(hidden, 1):,} more line(s) hidden[/]")
+            self.console.print(f"{layout.INDENT_STR}[{COLORS['text_dim']}]... {max(hidden, 1):,} more line(s) hidden[/]")
 
     def _diff_word_line(self, line, counterpart, *, minus, add_bg, del_bg, width):
         """Build a Rich Text for one +/- diff line. When a counterpart line is
@@ -2314,7 +2314,7 @@ class Renderer:
         marker = "- " if minus else "+ "
         body = line[1:]
 
-        text = Text("  ")  # indent carries no background
+        text = Text(layout.INDENT_STR)  # indent carries no background
         text.append(marker, style=base)
         if counterpart is None:
             text.append(body, style=base)
@@ -3163,7 +3163,7 @@ class Renderer:
         if not sys.stdin.isatty():
             return False
         self.console.print(
-            f"  [{COLORS['text_muted']}]Acknowledge this plan?  "
+            f"{layout.INDENT_STR}[{COLORS['text_muted']}]Acknowledge this plan?  "
             f"[{COLORS['accent']}]enter[/] proceed   "
             f"[{COLORS['text_muted']}]esc[/] decline[/]"
         )
@@ -3422,25 +3422,25 @@ class Renderer:
         ))
         if is_transient and self._display_prefs.get("auto_retry_api", True):
             self.console.print(
-                f"  [{COLORS['text_muted']}]Retry the same prompt, or /model to switch models.[/{COLORS['text_muted']}]"
+                f"{layout.INDENT_STR}[{COLORS['text_muted']}]Retry the same prompt, or /model to switch models.[/{COLORS['text_muted']}]"
             )
         self.console.print()
 
     def render_warning(self, message: str):
         """Render a compact command warning."""
-        self.console.print(f"  [{COLORS['warning']}]⎿  {message}[/{COLORS['warning']}]")
+        self.console.print(f"{layout.INDENT_STR}[{COLORS['warning']}]⎿  {message}[/{COLORS['warning']}]")
         self.console.print()
 
     def render_status(self, message: str):
-        self.console.print(f"  [{COLORS['text_muted']}]⎿  {message}[/{COLORS['text_muted']}]")
+        self.console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  {message}[/{COLORS['text_muted']}]")
         self.console.print()
 
     def render_success(self, message: str):
-        self.console.print(f"  [{COLORS['success']}]⎿  {message}[/{COLORS['success']}]")
+        self.console.print(f"{layout.INDENT_STR}[{COLORS['success']}]⎿  {message}[/{COLORS['success']}]")
         self.console.print()
 
     def render_command_result(self, message: str):
-        self.console.print(f"  [{COLORS['text_muted']}]⎿  {message}[/{COLORS['text_muted']}]")
+        self.console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  {message}[/{COLORS['text_muted']}]")
         self.console.print()
 
     def render_session_transcript(self, memory: Any, *, max_messages: int | None = None) -> None:
@@ -3681,7 +3681,7 @@ class Renderer:
             f"[/{COLORS['text_dim']}]"
         )
 
-    def _print_wrapped_muted_lines(self, text: str, *, indent: str = "  ", max_lines: int = 40) -> None:
+    def _print_wrapped_muted_lines(self, text: str, *, indent: str = layout.INDENT_STR, max_lines: int = 40) -> None:
         width = max(24, _surface_width(self.console) - len(indent) - 2)
         lines = [line.rstrip() for line in str(text).splitlines() if line.strip()]
         if not lines:
@@ -3731,7 +3731,7 @@ class Renderer:
         lines = [line.rstrip() for line in output.splitlines() if line.strip()] or ["(no output)"]
         first_line = _fit_cell(_result_headline(result, lines[0]), max(16, _surface_width(self.console) - 34))
         self.console.print(
-            f"  [{COLORS['text_muted']}]⎿  {escape(first_line)} "
+            f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  {escape(first_line)} "
             f"(ctrl+o to collapse)[/{COLORS['text_muted']}]",
             no_wrap=True,
             overflow="ellipsis",
@@ -3739,7 +3739,7 @@ class Renderer:
         rendered_lines += 1
         if len(lines) > 1:
             self.console.print()
-            self.console.print(f"  [{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
+            self.console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
             rendered_lines += 2
             # Streaming ctrl+o expands *inline* with plain print + cursor-up clear.
             # If the block is taller than the room below the cursor, printing it
@@ -3757,14 +3757,14 @@ class Renderer:
             output_width = max(16, _surface_width(self.console) - 6)
             for line in visible_lines:
                 self.console.print(
-                    f"    [{COLORS['text_dim']}]{escape(_fit_cell(line, output_width))}[/{COLORS['text_dim']}]",
+                    f"{layout.INDENT_STR * 2}[{COLORS['text_dim']}]{escape(_fit_cell(line, output_width))}[/{COLORS['text_dim']}]",
                     no_wrap=True,
                     overflow="ellipsis",
                 )
             rendered_lines += len(visible_lines)
             if len(lines) > len(visible_lines):
                 self.console.print(
-                    f"    [{COLORS['text_dim']}]... {len(lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_dim']}]",
+                    f"{layout.INDENT_STR * 2}[{COLORS['text_dim']}]... {len(lines) - len(visible_lines):,} more lines hidden[/{COLORS['text_dim']}]",
                     no_wrap=True,
                     overflow="ellipsis",
                 )
@@ -3782,7 +3782,7 @@ class Renderer:
             f"[{COLORS['accent']}]▾[/{COLORS['accent']}] "
             f"[{COLORS['text_muted']}]Thought for {duration}s[/{COLORS['text_muted']}]"
         )
-        self._print_wrapped_muted_lines(self._latest_thought_content, indent="  ")
+        self._print_wrapped_muted_lines(self._latest_thought_content, indent=layout.INDENT_STR)
         self._latest_transcript_expanded = True
         return True
 
@@ -3839,7 +3839,7 @@ class Renderer:
         if len(preview) > 120:
             preview = preview[:117] + "..."
         if preview:
-            self.console.print(f"  [{COLORS['text_dim']}]{escape(preview)}[/{COLORS['text_dim']}]")
+            self.console.print(f"{layout.INDENT_STR}[{COLORS['text_dim']}]{escape(preview)}[/{COLORS['text_dim']}]")
         self._latest_transcript_expanded = False
         return True
 
@@ -3903,7 +3903,7 @@ class Renderer:
             f"[{COLORS['text_muted']}]Thought for {duration}s[/{COLORS['text_muted']}]"
         )
         if self._latest_thought_content:
-            self._print_wrapped_muted_lines(self._latest_thought_content, indent="  ")
+            self._print_wrapped_muted_lines(self._latest_thought_content, indent=layout.INDENT_STR)
 
         self._thinking_start = None
         self._thinking_content = ""
@@ -4002,7 +4002,7 @@ class Renderer:
             return
         max_show = int(self._display_prefs.get("max_suggestions", 5))
         self.console.print()
-        self.console.print(f"  [{COLORS['text']}]Suggested next actions:[/{COLORS['text']}]")
+        self.console.print(f"{layout.INDENT_STR}[{COLORS['text']}]Suggested next actions:[/{COLORS['text']}]")
         for index, action in enumerate(actions[:max_show], 1):
             tool_name = str(getattr(action, "tool_name", "") or "").strip()
             arguments = dict(getattr(action, "arguments", {}) or {})
@@ -4024,7 +4024,7 @@ class Renderer:
                 detail_parts.append(risk)
             detail = f" [{COLORS['text_muted']}]· {escape(' · '.join(detail_parts))}[/{COLORS['text_muted']}]" if detail_parts else ""
             title = escape(str(getattr(action, "title", "") or "Next action"))
-            self.console.print(f"  {index}. [{COLORS['text']}]{title}[/{COLORS['text']}]{detail}")
+            self.console.print(f"{layout.INDENT_STR}{index}. [{COLORS['text']}]{title}[/{COLORS['text']}]{detail}")
             # §5 (mission anchor): ground each suggestion in current mission
             # state — lead with the rationale, append the concrete discovered
             # fact (evidence) that motivated it. This is distinct from the
@@ -4041,7 +4041,7 @@ class Renderer:
                     anchor = f"{anchor} — {evidence_items[0]}" if anchor else evidence_items[0]
                 if anchor:
                     self.console.print(
-                        f"     [{COLORS['text_muted']}]Why: {escape(anchor)}[/{COLORS['text_muted']}]"
+                        f"{layout.RESULT_INDENT_STR}[{COLORS['text_muted']}]Why: {escape(anchor)}[/{COLORS['text_muted']}]"
                     )
             # §5: one concise experience reason per suggestion; verbose
             # Match:/Missing: learning internals stay hidden.
@@ -4055,9 +4055,9 @@ class Renderer:
                 ]
                 if lessons:
                     self.console.print(
-                        f"     [{COLORS['text_muted']}]Lesson: {escape(lessons[0])}[/{COLORS['text_muted']}]"
+                        f"{layout.RESULT_INDENT_STR}[{COLORS['text_muted']}]Lesson: {escape(lessons[0])}[/{COLORS['text_muted']}]"
                     )
-        self.console.print(f"  [{COLORS['text_muted']}]Reply with a number or describe what to do next.[/{COLORS['text_muted']}]")
+        self.console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]Reply with a number or describe what to do next.[/{COLORS['text_muted']}]")
 
     # ── Agent Stream Rendering ────────────────────────────────────────
 
@@ -4283,7 +4283,7 @@ class Renderer:
                         pass  # Don't interrupt thinking display for status
                     else:
                         self.console.print(
-                            f"  [{COLORS['text_muted']}]{event.message}[/{COLORS['text_muted']}]"
+                            f"{layout.INDENT_STR}[{COLORS['text_muted']}]{event.message}[/{COLORS['text_muted']}]"
                         )
 
                 elif isinstance(event, ThinkingEvent):
@@ -4399,7 +4399,7 @@ class Renderer:
                 elif isinstance(event, PlanDivergenceEvent):
                     reason = f" — {escape(event.reason)}" if event.reason else ""
                     self.console.print(
-                        f"  [{COLORS['warning']}]⚠ unplanned step: {escape(event.tool_name)}[/]"
+                        f"{layout.INDENT_STR}[{COLORS['warning']}]⚠ unplanned step: {escape(event.tool_name)}[/]"
                         f"[{COLORS['text_dim']}]{reason}[/]"
                     )
 
@@ -4567,7 +4567,7 @@ class Renderer:
                 label = f"{count} tool" + ("s" if count != 1 else "")
                 tail = f" · {format_duration(elapsed)}" if elapsed >= 0.1 else ""
                 self.console.print(
-                    f"  [{COLORS['success']}]✓[/] [{COLORS['text_muted']}]{label}{tail}[/{COLORS['text_muted']}]"
+                    f"{layout.INDENT_STR}[{COLORS['success']}]✓[/] [{COLORS['text_muted']}]{label}{tail}[/{COLORS['text_muted']}]"
                 )
                 _advance_ctrl_o_tail(1)
 

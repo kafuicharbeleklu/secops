@@ -12,6 +12,7 @@ from secops_agent.core.memory import ConversationMemory
 from secops_agent.ui.overlay import OverlayChoice, choose_overlay, view_logs_overlay
 from secops_agent.ui.runtime import RuntimeArtifact, RuntimeState
 from secops_agent.ui.spool_display import spool_reference, supervised_detail_text
+from secops_agent.ui import layout
 
 
 def _single_line(text: str, limit: int = 180) -> str:
@@ -128,38 +129,38 @@ def build_trajectory_text(
     if artifacts:
         for artifact in artifacts[-20:]:
             label = f"{artifact.id} · {artifact.kind} · {artifact.title}"
-            lines.append(f"  {label}")
-            lines.append(f"    {_single_line(artifact.preview, 180)}")
+            lines.append(f"{layout.INDENT_STR}{label}")
+            lines.append(f"{layout.INDENT_STR * 2}{_single_line(artifact.preview, 180)}")
     else:
-        lines.append("  No artifacts yet.")
+        lines.append(f"{layout.INDENT_STR}No artifacts yet.")
 
     lines.append("")
     lines.append("Attachments")
     if attachments:
         for artifact in attachments[-20:]:
             label = f"{artifact.id} · {artifact.title}"
-            lines.append(f"  {label}")
-            lines.append(f"    {_single_line(artifact.preview, 180)}")
+            lines.append(f"{layout.INDENT_STR}{label}")
+            lines.append(f"{layout.INDENT_STR * 2}{_single_line(artifact.preview, 180)}")
     else:
-        lines.append("  No attachments yet.")
+        lines.append(f"{layout.INDENT_STR}No attachments yet.")
 
     if latest_tool:
         lines.extend(
             [
                 "",
                 "Expanded Tool Output",
-                f"  {latest_tool.id} · {latest_tool.source or latest_tool.title}",
+                f"{layout.INDENT_STR}{latest_tool.id} · {latest_tool.source or latest_tool.title}",
                 "",
             ]
         )
         content_lines = str(latest_tool.content or "(no output)").splitlines() or ["(no output)"]
-        lines.extend(f"  {line}" for line in content_lines)
+        lines.extend(f"{layout.INDENT_STR}{line}" for line in content_lines)
 
     if tasks:
         lines.extend(["", "Background Tasks"])
         for task in tasks[-20:]:
             detail = f" · {task.detail}" if task.detail else ""
-            lines.append(f"  {task.id} · {task.status} · {task.name}{detail}")
+            lines.append(f"{layout.INDENT_STR}{task.id} · {task.status} · {task.name}{detail}")
 
     return "\n".join(lines).rstrip() + "\n"
 

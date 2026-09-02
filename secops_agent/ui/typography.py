@@ -29,7 +29,7 @@ from __future__ import annotations
 import enum
 from typing import TYPE_CHECKING
 
-from secops_agent.ui.layout import INDENT, RESULT_INDENT
+from secops_agent.ui.layout import INDENT, RESULT_INDENT, INDENT_STR, RESULT_INDENT_STR
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from rich.console import Console
@@ -41,10 +41,9 @@ __all__ = [
 ]
 
 # ── Indentation (DESIGN_SPEC §1.1 indent.*) ──────────────────────────────
-# INDENT / RESULT_INDENT live in layout.py (the geometry layer); re-exported here
-# so response-path code has one import for all typographic constants.
-INDENT_STR = " " * INDENT
-RESULT_INDENT_STR = " " * RESULT_INDENT
+# INDENT / RESULT_INDENT and their string forms live in layout.py (the geometry
+# layer); re-exported here so response-path code has one import for all
+# typographic constants.
 
 
 def indent(text: str = "", level: int = 1) -> str:

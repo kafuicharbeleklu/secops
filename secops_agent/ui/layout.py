@@ -34,7 +34,7 @@ from rich.cells import cell_len as _rich_cell_len, set_cell_size as _rich_set_ce
 __all__ = [
     "SAFE_WIDTH", "SAFE_HEIGHT", "NARROW_MAX", "WIDE_MIN",
     "TEXT_MAX_WIDTH", "FRAME_MAX_WIDTH", "RESIZE_DEBOUNCE",
-    "INDENT", "RESULT_INDENT",
+    "INDENT", "RESULT_INDENT", "INDENT_STR", "RESULT_INDENT_STR",
     "Breakpoint", "Layout", "ResizeDebouncer",
     "strip_ansi", "cell_len", "fit_cell", "pad_cell",
     "terminal_size", "is_tty", "color_enabled", "classify", "resolve",
@@ -66,6 +66,10 @@ FRAME_MAX_WIDTH = 120
 # never a bare "  " literal — see secops_agent/ui/typography.py.
 INDENT = 2
 RESULT_INDENT = 5
+# String forms for line-prefix indentation, so response-path f-strings read
+# f"{layout.INDENT_STR}…" / f"{layout.RESULT_INDENT_STR}…" with no bare "  " literal.
+INDENT_STR = " " * INDENT
+RESULT_INDENT_STR = " " * RESULT_INDENT
 
 # Coalescing window for a drag-resize burst (seconds). Sits alongside the
 # streaming render throttle; long enough to swallow a drag, short enough to feel

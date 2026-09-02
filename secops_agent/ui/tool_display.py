@@ -61,7 +61,7 @@ def truncate_output(text: str, max_chars: int = 2000) -> str:
 
     return (
         f"{head}\n\n"
-        f"  ... (+{hidden:,} chars hidden) ...\n\n"
+        f"{layout.INDENT_STR}... (+{hidden:,} chars hidden) ...\n\n"
         f"{tail}"
     )
 
@@ -474,7 +474,7 @@ def _tool_result_log_reference_line(result: ToolResult, *, max_width: int) -> st
     reference = spool_reference(result.metadata)
     if not reference:
         return ""
-    return f"     log: {_fit_display(reference, max(10, max_width - 11))}"
+    return f"{layout.RESULT_INDENT_STR}log: {_fit_display(reference, max(10, max_width - 11))}"
 
 
 _RISK_LABELS = {
@@ -639,16 +639,16 @@ def _write_file_diff_preview_lines(arguments: Dict[str, Any], width: int) -> lis
     summary = f"Added {n_lines} {line_label}"
     if path:
         summary = f"{summary} to {path}"
-    preview = [f"  ⎿  {summary}"]
+    preview = [f"{layout.INDENT_STR}⎿  {summary}"]
     safe_width = max(24, min(120, width - 14))
     max_display = min(6, len(content_lines))
     for idx, content_line in enumerate(content_lines[:max_display]):
         display_line = content_line.rstrip()
         if len(display_line) > safe_width:
             display_line = display_line[: safe_width - 3] + "..."
-        preview.append(f"     {idx + 1:>4} +    {display_line}")
+        preview.append(f"{layout.RESULT_INDENT_STR}{idx + 1:>4} +    {display_line}")
     if len(content_lines) > max_display:
-        preview.append(f"     ... {len(content_lines) - max_display:,} more lines")
+        preview.append(f"{layout.RESULT_INDENT_STR}... {len(content_lines) - max_display:,} more lines")
     return preview
 
 
@@ -676,16 +676,16 @@ def _approval_lines(
     lines = [
         title,
         separator,
-        f"  {_fit_display('Requesting permission for: ' + call_text, max(1, safe_width - 4))}",
-        f"  {_fit_display(_approval_context_line(tool_name, arguments, resource), max(1, safe_width - 4))}",
+        f"{layout.INDENT_STR}{_fit_display('Requesting permission for: ' + call_text, max(1, safe_width - 4))}",
+        f"{layout.INDENT_STR}{_fit_display(_approval_context_line(tool_name, arguments, resource), max(1, safe_width - 4))}",
     ]
 
     # PROC-03: an offensive/irreversible R6+ action is confirmed by typing its
     # name; surface that at the gate so approval is deliberate, not reflexive.
     if _is_high_risk_approval(tool_name, resource):
         confirm_hint = "Type '" + _typed_confirmation_token(tool_name, resource) + "' to confirm; default is No."
-        lines.append("  " + _fit_display("⚠ High-risk, irreversible action.", max(1, safe_width - 4)))
-        lines.append("  " + _fit_display(confirm_hint, max(1, safe_width - 4)))
+        lines.append(layout.INDENT_STR + _fit_display("⚠ High-risk, irreversible action.", max(1, safe_width - 4)))
+        lines.append(layout.INDENT_STR + _fit_display(confirm_hint, max(1, safe_width - 4)))
 
     # Reviewable artifact BEFORE the gate: for write/create tools, show the diff the
     # operator is about to approve — not just a prose summary rendered post-write (T1.1).
@@ -701,9 +701,9 @@ def _approval_lines(
     lines.append("")
     is_command_resource = resource.kind in {"command", "command_exact", "command_prefix"}
     if is_command_resource and _editable_command(arguments):
-        lines.append("  ↑/↓ Navigate · tab Amend · e edit command")
+        lines.append(f"{layout.INDENT_STR}↑/↓ Navigate · tab Amend · e edit command")
     else:
-        lines.append("  ↑/↓ Navigate · enter Select")
+        lines.append(f"{layout.INDENT_STR}↑/↓ Navigate · enter Select")
     return lines
 
 
@@ -899,7 +899,7 @@ def build_collapsed_result_lines(result: ToolResult, *, width: int) -> list[str]
         if len(error_msg) > 120:
             error_msg = error_msg[:117] + "..."
         elapsed = f" ({format_duration(result.execution_time)})" if result.execution_time > 0 else ""
-        lines = [f"  [{COLORS['error']}]⎿  {escape(error_msg)}{elapsed}[/{COLORS['error']}]"]
+        lines = [f"{layout.INDENT_STR}[{COLORS['error']}]⎿  {escape(error_msg)}{elapsed}[/{COLORS['error']}]"]
         if log_line:
             lines.append(f"[{meta}]{escape(log_line)}[/{meta}]")
         return lines
@@ -921,22 +921,22 @@ def build_collapsed_result_lines(result: ToolResult, *, width: int) -> list[str]
             body = [ln for ln in nonempty if not ln.strip().startswith("[Exit Code:")]
             headline = _fit_display(body[0] if body else f"exit {exit_match.group(1)}", max(20, width - 8))
             return [
-                f"  [{corner}]⎿  [/{corner}][{fact}]{escape(headline)}[/{fact}]",
-                f"     [{meta}][Exit Code: {exit_match.group(1)}] · [/{meta}]{hint}",
+                f"{layout.INDENT_STR}[{corner}]⎿  [/{corner}][{fact}]{escape(headline)}[/{fact}]",
+                f"{layout.RESULT_INDENT_STR}[{meta}][Exit Code: {exit_match.group(1)}] · [/{meta}]{hint}",
             ]
 
     # 1) Structured key fact from a parser → lead with it; detail under ctrl+o.
     if parsed_summary:
         headline = _fit_display(parsed_summary.splitlines()[0], max(20, width - 8))
-        lines = [f"  [{corner}]⎿  [/{corner}][{fact}]{escape(headline)}[/{fact}]"]
+        lines = [f"{layout.INDENT_STR}[{corner}]⎿  [/{corner}][{fact}]{escape(headline)}[/{fact}]"]
         if nonempty:
-            lines.append(f"     [{meta}]+{len(nonempty):,} lines · [/{meta}]{hint}")
+            lines.append(f"{layout.RESULT_INDENT_STR}[{meta}]+{len(nonempty):,} lines · [/{meta}]{hint}")
         return lines
 
     # 2) Single meaningful line → render it directly on the corner.
     if summary["total_lines"] <= 1 and summary["lines"]:
         line = _fit_display(summary["lines"][0], max(20, width - 6))
-        lines = [f"  [{corner}]⎿  [/{corner}][{fact}]{escape(line)}[/{fact}]"]
+        lines = [f"{layout.INDENT_STR}[{corner}]⎿  [/{corner}][{fact}]{escape(line)}[/{fact}]"]
         if log_line:
             lines.append(f"[{meta}]{escape(log_line)}[/{meta}]")
         return lines
@@ -950,7 +950,7 @@ def build_collapsed_result_lines(result: ToolResult, *, width: int) -> list[str]
         metrics.append(f"{summary['total_lines']:,} {line_label}")
         metrics.append(f"{summary['chars']:,} chars")
     details = " · ".join(metrics) if metrics else ("no output" if not summary["chars"] else "done")
-    lines = [f"  [{corner}]⎿  [/{corner}][{fact}]{escape(details)}[/{fact}] {hint}"]
+    lines = [f"{layout.INDENT_STR}[{corner}]⎿  [/{corner}][{fact}]{escape(details)}[/{fact}] {hint}"]
     if log_line:
         lines.append(f"[{meta}]{escape(log_line)}[/{meta}]")
     return lines
@@ -995,7 +995,7 @@ class ToolResultBox:
                 summary_verb = "Added" if n_lines > 0 else "Wrote"
                 line_label = "line" if n_lines == 1 else "lines"
                 emit(
-                    f"  [{COLORS['text_muted']}]⎿  {summary_verb} {n_lines} {line_label}[/{COLORS['text_muted']}]"
+                    f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  {summary_verb} {n_lines} {line_label}[/{COLORS['text_muted']}]"
                 )
                 # Show up to 6 content lines with real line numbers and a "+" prefix
                 # on a green background (Claude-Code diff style).
@@ -1009,12 +1009,12 @@ class ToolResultBox:
                         display_line = display_line[:safe_width - 3] + "..."
                     pad = " " * max(0, safe_width - len(display_line))
                     emit(
-                        f"     [{COLORS['text_muted']}]{line_no:>4}[/{COLORS['text_muted']}] "
+                        f"{layout.RESULT_INDENT_STR}[{COLORS['text_muted']}]{line_no:>4}[/{COLORS['text_muted']}] "
                         f"[{add_style}]+  {escape(display_line)}{pad}[/]"
                     )
                 if len(content_lines) > max_display:
                     emit(
-                        f"     [{COLORS['text_muted']}]... {len(content_lines) - max_display:,} more lines[/{COLORS['text_muted']}]"
+                        f"{layout.RESULT_INDENT_STR}[{COLORS['text_muted']}]... {len(content_lines) - max_display:,} more lines[/{COLORS['text_muted']}]"
                     )
                 if log_line:
                     emit(f"[{COLORS['text_muted']}]{escape(log_line)}[/{COLORS['text_muted']}]")
@@ -1128,8 +1128,8 @@ class ApprovalPrompt:
                 rendered_lines = 0
                 sys.stdout.write("\x1b[?25h")
                 sys.stdout.flush()
-                sys.stdout.write(f"  Current command: {command}\n")
-                sys.stdout.write("  Edit command: ")
+                sys.stdout.write(f"{layout.INDENT_STR}Current command: {command}\n")
+                sys.stdout.write(f"{layout.INDENT_STR}Edit command: ")
                 sys.stdout.flush()
                 edited = sys.stdin.readline().strip()
                 if not edited or edited == command:
@@ -1151,7 +1151,7 @@ class ApprovalPrompt:
                 sys.stdout.write("\x1b[?25h")
                 sys.stdout.flush()
                 label = f"R{tier} " if tier is not None else ""
-                sys.stdout.write(f"  ⚠ {label}high-risk. Type '{token}' to confirm (blank cancels): ")
+                sys.stdout.write(f"{layout.INDENT_STR}⚠ {label}high-risk. Type '{token}' to confirm (blank cancels): ")
                 sys.stdout.flush()
                 typed = sys.stdin.readline().strip()
                 sys.stdout.write("\x1b[?25l")
@@ -1202,20 +1202,20 @@ class ApprovalPrompt:
 
         # Print the final result in the prompt
         if decision_code == "ALLOW_ONCE":
-            console.print(f"  [{COLORS['success']}]⎿  Allowed once[/{COLORS['success']}]")
+            console.print(f"{layout.INDENT_STR}[{COLORS['success']}]⎿  Allowed once[/{COLORS['success']}]")
             return ApprovalDecision(allowed=True)
         elif decision_code == "ALLOW_SESSION":
-            console.print(f"  [{COLORS['success']}]⎿  Allowed for session[/{COLORS['success']}]")
+            console.print(f"{layout.INDENT_STR}[{COLORS['success']}]⎿  Allowed for session[/{COLORS['success']}]")
             return ApprovalDecision(allowed=True, scope=ApprovalScope.SESSION)
         elif decision_code == "ALLOW_PERSISTENT":
-            console.print(f"  [{COLORS['success']}]⎿  Allowed persistently[/{COLORS['success']}]")
+            console.print(f"{layout.INDENT_STR}[{COLORS['success']}]⎿  Allowed persistently[/{COLORS['success']}]")
             return ApprovalDecision(allowed=True, scope=ApprovalScope.PERSISTENT)
         elif decision_code == "AMEND_COMMAND" and amended_arguments:
-            console.print(f"  [{COLORS['text_muted']}]⎿  Command amended; requesting permission again[/{COLORS['text_muted']}]")
+            console.print(f"{layout.INDENT_STR}[{COLORS['text_muted']}]⎿  Command amended; requesting permission again[/{COLORS['text_muted']}]")
             return ApprovalDecision(allowed=False, amended_arguments=amended_arguments)
         elif decision_code == "INTERRUPT":
-            console.print(f"  [{COLORS['error']}]✖ Refused · tool non exécuté[/{COLORS['error']}]")
+            console.print(f"{layout.INDENT_STR}[{COLORS['error']}]✖ Refused · tool non exécuté[/{COLORS['error']}]")
             return ApprovalDecision(allowed=False, interrupted=True)
         else:
-            console.print(f"  [{COLORS['error']}]✖ Refused · tool non exécuté[/{COLORS['error']}]")
+            console.print(f"{layout.INDENT_STR}[{COLORS['error']}]✖ Refused · tool non exécuté[/{COLORS['error']}]")
             return ApprovalDecision(allowed=False)
