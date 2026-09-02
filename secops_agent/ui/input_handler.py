@@ -1373,7 +1373,12 @@ class InputHandler:
 
         try:
             user_input = await self.session.prompt_async(
-                self._prompt_fragments(),
+                # Pass the fragment builder as a CALLABLE (not its one-shot result)
+                # so prompt_toolkit re-evaluates the '>' border at the current width
+                # on every redraw — including a SIGWINCH resize (P2). A static list
+                # froze the prompt border at the launch width while the (callable)
+                # toolbar kept resizing, leaving mismatched separators.
+                self._prompt_fragments,
                 bottom_toolbar=self._get_toolbar,
             )
 

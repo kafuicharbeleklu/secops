@@ -417,5 +417,56 @@ class AbbreviatedHintsTests(unittest.TestCase):
         self.assertIn(visible, WAIT_TIPS)
 
 
+class PromptResizeRegressionTests(unittest.TestCase):
+    """The interactive prompt frame must re-wrap to the current width on resize.
+
+    Regression: prompt_async received the *result* of _prompt_fragments() (a
+    static list), freezing the '>' border at the launch width while the callable
+    toolbar kept resizing — mismatched separators on any resize."""
+
+    def test_get_input_passes_callable_message(self):
+        import asyncio
+        from unittest import mock
+        import secops_agent.ui.input_handler as ih
+        h = ih.InputHandler()
+        captured = {}
+
+        async def fake(message=None, **kw):
+            captured["message"] = message
+            return "hi"
+
+        with mock.patch.object(h.session, "prompt_async", side_effect=fake):
+            asyncio.run(h.get_input())
+        self.assertTrue(
+            callable(captured["message"]),
+            "prompt message must be a callable so the border re-wraps on resize")
+
+    def test_prompt_border_tracks_current_width(self):
+        import secops_agent.ui.input_handler as ih
+        h = ih.InputHandler()
+        orig = ih._terminal_width
+        try:
+            ih._terminal_width = lambda default=80: 50
+            sep_small = next(t for _s, t in h._prompt_fragments() if "─" in t).rstrip("\n")
+            ih._terminal_width = lambda default=80: 160
+            sep_big = next(t for _s, t in h._prompt_fragments() if "─" in t).rstrip("\n")
+        finally:
+            ih._terminal_width = orig
+        self.assertEqual(len(sep_small), 49)
+        self.assertEqual(len(sep_big), 119)   # capped at FRAME_MAX_WIDTH (120) - 1
+
+    def test_prompt_and_toolbar_share_width_source(self):
+        # Both derive from _frame_width(_terminal_width()) so they never disagree.
+        import secops_agent.ui.input_handler as ih
+        h = ih.InputHandler()
+        orig = ih._terminal_width
+        try:
+            ih._terminal_width = lambda default=80: 90
+            sep = next(t for _s, t in h._prompt_fragments() if "─" in t).rstrip("\n")
+        finally:
+            ih._terminal_width = orig
+        self.assertEqual(len(sep), 89)
+
+
 if __name__ == "__main__":
     unittest.main()
