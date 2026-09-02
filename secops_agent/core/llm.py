@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import contextlib
+import os
 import re
 import warnings
 from pathlib import Path
@@ -25,6 +26,16 @@ from secops_agent.core.model_catalog import (
     resolve_model_selection,
     route_model,
 )
+
+
+def _prompt_caching_enabled() -> bool:
+    """Opt-in (SECOPS_PROMPT_CACHING=1): keep the system_instruction a STABLE static
+    prefix and carry the per-turn mission context in `contents` instead. That lets
+    Gemini implicit caching reuse the static instruction + tool schema across the
+    ~14 LLM calls a turn makes. Default OFF — it changes where the model sees the
+    mission context, so it needs live verification before becoming the default."""
+    return os.environ.get("SECOPS_PROMPT_CACHING", "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 SECOPS_SYSTEM_INSTRUCTION = (
     "You are SecOps Agent — an autonomous Security Operations and Pentesting AI for "
@@ -256,9 +267,11 @@ class GeminiProvider:
             )
             parts.append(contract)
 
-        # Inject structured mission context (hosts, findings, plan)
+        # Inject structured mission context (hosts, findings, plan). With prompt
+        # caching enabled this dynamic block moves to `contents` (see stream_chat)
+        # so the static instruction stays a cacheable prefix.
         mission_ctx = getattr(self, "_mission_context", "")
-        if mission_ctx:
+        if mission_ctx and not _prompt_caching_enabled():
             parts.append(mission_ctx)
 
         # Inject extension/skill context
@@ -330,6 +343,14 @@ class GeminiProvider:
                     if self._valid_function_name(str(tool.get("name") or "").strip())
                 }
             contents = self._prepare_contents(messages, allowed_function_names=allowed_function_names)
+            # Prompt caching: carry the dynamic mission context as a leading context
+            # message so the static system_instruction + tool schema stay a stable,
+            # cacheable prefix across the turn's LLM calls (opt-in, default off).
+            mission_ctx = getattr(self, "_mission_context", "")
+            if mission_ctx and _prompt_caching_enabled():
+                contents = [
+                    types.Content(role="user", parts=[types.Part.from_text(text=mission_ctx)])
+                ] + contents
             profile = self._effective_profile(prompt=self._last_prompt, context=self._last_context)
 
             # Build configuration

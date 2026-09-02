@@ -78,6 +78,26 @@ class ModelBehaviorTests(unittest.TestCase):
         self.assertIn("Use tools only when they materially improve accuracy", instruction)
         self.assertIn("Response recipes", instruction)
 
+    def test_prompt_caching_moves_mission_context_out_of_system_instruction(self):
+        import os
+        from unittest.mock import patch
+
+        provider = GeminiProvider(api_key="", model_name="gemini")
+        provider.set_mission_context("## MISSION_MARKER current findings")
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SECOPS_PROMPT_CACHING", None)
+            # Default: mission context rides in the system instruction (unchanged).
+            self.assertIn("MISSION_MARKER", provider._system_instruction())
+
+        with patch.dict(os.environ, {"SECOPS_PROMPT_CACHING": "1"}):
+            instruction = provider._system_instruction()
+            # Cached mode: the dynamic block leaves the system instruction so the
+            # static prefix (instruction + contract) stays byte-stable/cacheable.
+            self.assertNotIn("MISSION_MARKER", instruction)
+            self.assertIn("Terminal output standard", instruction)
+            self.assertIn("same concise terminal-agent interaction style", instruction)
+
     def test_gemma_user_message_is_not_rewritten_by_model_adapter(self):
         provider = GeminiProvider(api_key="", model_name="gemma")
 
