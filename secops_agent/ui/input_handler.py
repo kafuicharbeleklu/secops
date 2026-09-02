@@ -632,7 +632,8 @@ def _toggle_anchored_ctrl_o_surface(runtime: Any | None, console: Any | None) ->
     # so tail + expanded height always fits; the full output stays in /trajectory.
     if next_expanded:
         budget = max(1, terminal_height - 1 - tail_lines)
-        if len(next_lines) > budget:
+        capped_to_budget = len(next_lines) > budget
+        if capped_to_budget:
             keep = max(1, budget - 1)
             hidden = len(next_lines) - keep
             note = (
@@ -645,8 +646,13 @@ def _toggle_anchored_ctrl_o_surface(runtime: Any | None, console: Any | None) ->
         # bottom to rewrite reliably (see _ANCHOR_TOGGLE_HEADROOM): the block
         # stays collapsed and the full output is one command away in
         # /trajectory, instead of every toggle stacking another copy.
+        # A block the budget already truncated ends flush with the bottom of the
+        # region it is rewritten into, which keeps the delete/insert arithmetic
+        # aligned — those expansions are left alone so the common "long output,
+        # show me what fits" case keeps working.
         if (
-            terminal_height >= _ANCHOR_TOGGLE_MIN_HEIGHT
+            not capped_to_budget
+            and terminal_height >= _ANCHOR_TOGGLE_MIN_HEIGHT
             and len(next_lines) + tail_lines > terminal_height - _ANCHOR_TOGGLE_HEADROOM
         ):
             if not bool(getattr(runtime, "ctrl_o_anchor_too_tall_notified", False)):

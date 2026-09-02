@@ -1847,6 +1847,37 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("/trajectory", output)
         self.assertEqual(output.count("Output too tall"), 1)
 
+    def test_ctrl_o_still_expands_a_long_output_the_budget_truncates(self):
+        # The cascade guard must not cost the common case the user actually
+        # relies on: a long tool output (sysinfo, ~46 lines) that the budget
+        # truncates to what fits, ending with "... N more lines — /trajectory".
+        # Those expansions stay flush with the bottom of the rewritten region,
+        # so the delete/insert arithmetic stays aligned and they must still open.
+        runtime = RuntimeState()
+        runtime.set_ctrl_o_anchor(
+            ["● Sysinfo(all) (ctrl+o to expand)", "  ⎿  Hostname: ubuntu +43 lines"],
+            ["● Sysinfo(all)", "  ⎿  Hostname: ubuntu (ctrl+o to collapse)", "", "  Output:"]
+            + [f"    line {i}" for i in range(42)],
+            tail_lines=3,
+        )
+        memory = ConversationMemory()
+        stream = io.StringIO()
+        console = Console(width=80, force_terminal=True, color_system=None, file=stream)
+
+        with patch(
+            "secops_agent.ui.input_handler.shutil.get_terminal_size",
+            return_value=os.terminal_size((80, 24)),
+        ):
+            first = _show_ctrl_o_surface(memory, runtime, console)
+            second = _show_ctrl_o_surface(memory, runtime, console)
+
+        output = stream.getvalue()
+        self.assertEqual(first, "tool-output")
+        self.assertEqual(second, "tool-output-collapsed")
+        self.assertIn("more lines", output)
+        self.assertIn("/trajectory", output)
+        self.assertNotIn("Output too tall", output)
+
     def test_ctrl_o_still_expands_an_output_that_fits_the_screen(self):
         # The cascade guard must not cost ordinary expansions: a short output on
         # the same roomy terminal still toggles in place.
