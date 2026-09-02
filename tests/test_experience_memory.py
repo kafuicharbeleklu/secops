@@ -635,6 +635,30 @@ class ExperienceMemoryTests(unittest.TestCase):
         counts = corroboration_counts(siblings)
         self.assertEqual(sorted(counts.values()), [3, 3, 3])
 
+    def test_tfidf_weights_distinctive_tokens_above_common_ones(self):
+        # 'http' is ubiquitous across the corpus (low idf → tends to 1.0), while a
+        # specific CVE appears once (high idf) — so retrieval keys on what actually
+        # distinguishes a lesson, not on common words.
+        from secops_agent.core.experience import lesson_idf
+
+        corpus = [
+            CaseLesson(title=f"http finding {i}", outcome="success", service_fingerprints=["http apache"])
+            for i in range(6)
+        ]
+        corpus.append(
+            CaseLesson(
+                title="cve-2021-41773 path traversal",
+                outcome="success",
+                technology_hints=["cve-2021-41773"],
+            )
+        )
+        idf = lesson_idf(corpus)
+
+        self.assertGreater(idf.get("cve-2021-41773", 1.0), idf.get("http", 1.0))
+        # a token present in every lesson weighs ~1.0 (never pulled below), so this
+        # stays a precision layer on top of the count-based score.
+        self.assertGreaterEqual(idf.get("http", 1.0), 1.0)
+
     def test_success_lesson_boosts_upload_candidate_and_explains_reason(self):
         mission = _web_upload_mission()
         lesson = CaseLesson(

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import re
 import shutil
 import uuid
@@ -1155,10 +1156,11 @@ def retrieve_similar_lessons(
 ) -> list[tuple[CaseLesson, float]]:
     lessons = list(lessons)
     counts = corroboration_counts(lessons)
+    idf = lesson_idf(lessons)
     decisions = [
         evaluate_lesson_match(
             lesson, mission, action, min_score=min_score,
-            corroboration=counts.get(lesson.id, 1),
+            corroboration=counts.get(lesson.id, 1), idf=idf,
         )
         for lesson in lessons
     ]
@@ -1183,6 +1185,7 @@ def evaluate_lesson_match(
     *,
     min_score: float = 0.18,
     corroboration: int = 1,
+    idf: dict[str, float] | None = None,
 ) -> LessonMatchDecision:
     """Evaluate one lesson against the current mission/action using one decision path."""
     reasons: list[str] = []
@@ -1234,7 +1237,16 @@ def evaluate_lesson_match(
             if not overlap:
                 reasons.append("insufficient compatible evidence overlap")
             else:
-                raw_score = (len(overlap) / max(6, len(lesson_tokens))) * (0.5 + lesson.confidence / 2)
+                # TF-IDF weighting (precision): weigh matched tokens by how
+                # distinctive they are across the corpus. With no idf supplied this
+                # is exactly the count-based ratio (backward-compatible).
+                if idf:
+                    weighted_overlap = sum(idf.get(token, 1.0) for token in overlap)
+                    weighted_total = sum(idf.get(token, 1.0) for token in lesson_tokens)
+                else:
+                    weighted_overlap = float(len(overlap))
+                    weighted_total = float(len(lesson_tokens))
+                raw_score = (weighted_overlap / max(6.0, weighted_total)) * (0.5 + lesson.confidence / 2)
                 if _matches_action(lesson, action):
                     raw_score += 0.25
                 # Recency decay for AUTO (unreviewed) lessons so stale auto-captured
@@ -1670,6 +1682,27 @@ def _corroboration_multiplier(corroboration: int) -> float:
     if corroboration <= 1:
         return 1.0
     return 1.0 + min(_MAX_CORROBORATION_BONUS, 0.1 * (corroboration - 1))
+
+
+def lesson_idf(lessons: Iterable[CaseLesson]) -> dict[str, float]:
+    """Inverse-document-frequency weight per fingerprint token across the lesson
+    corpus. Distinctive tokens (a specific CVE, path, version) get a high weight;
+    ubiquitous ones ('http', 'tcp') tend toward 1.0, so retrieval matches on what
+    actually distinguishes a lesson rather than on common words. Smoothed so a
+    token present in every lesson weighs ~1.0 (never below), keeping this a
+    precision refinement layered on top of the count-based score."""
+    documents = [lesson.fingerprint_tokens() for lesson in lessons]
+    total = len(documents)
+    if total == 0:
+        return {}
+    document_frequency: Counter[str] = Counter()
+    for tokens in documents:
+        for token in tokens:
+            document_frequency[token] += 1
+    return {
+        token: math.log((1 + total) / (1 + freq)) + 1.0
+        for token, freq in document_frequency.items()
+    }
 
 
 def _lesson_identity(lesson: CaseLesson) -> str:
