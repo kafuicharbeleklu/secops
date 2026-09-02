@@ -1,4 +1,4 @@
-"""Named colour palettes (paprika / ocean / vivid / reef + a light theme), theme
+"""Named colour palettes (paprika + warm ember/sunset/amber/terracotta/rose / reef / neon + a light theme), theme
 set_theme. Each palette's four signal hues stay readable on the terminal ground.
 """
 from __future__ import annotations
@@ -43,8 +43,8 @@ class ThemeResolutionTests(unittest.TestCase):
         self.assertEqual(self._resolve(), "paprika")
 
     def test_env_selects_named_palette(self):
-        self.assertEqual(self._resolve("ocean"), "ocean")
-        self.assertEqual(self._resolve("vivid"), "vivid")
+        self.assertEqual(self._resolve("reef"), "reef")
+        self.assertEqual(self._resolve("ember"), "ember")
 
     def test_unknown_falls_back_to_default(self):
         self.assertEqual(self._resolve("bogus"), "paprika")
@@ -55,15 +55,18 @@ class PaletteTests(unittest.TestCase):
         theme.set_theme("paprika")  # restore the default for other tests
 
     def test_three_named_palettes(self):
-        self.assertEqual(set(theme._PALETTES), {"paprika", "ocean", "vivid", "reef", "neon", "light"})
+        self.assertEqual(
+            set(theme._PALETTES),
+            {"paprika", "ember", "sunset", "amber", "terracotta", "rose", "reef", "neon", "light"},
+        )
 
     def test_all_palettes_share_keys(self):
         keysets = [frozenset(p) for p in theme._PALETTES.values()]
         self.assertEqual(len(set(keysets)), 1, "every palette must define the same keys")
 
     def test_set_theme_switches_live(self):
-        self.assertEqual(theme.set_theme("vivid"), "vivid")
-        self.assertEqual(theme.COLORS["accent"], "#08bdbd")
+        self.assertEqual(theme.set_theme("ember"), "ember")
+        self.assertEqual(theme.COLORS["accent"], "#f2884e")
         self.assertEqual(theme.set_theme("paprika"), "paprika")
         self.assertEqual(theme.COLORS["accent"], "#669bbc")
 
@@ -88,7 +91,7 @@ class PaletteTests(unittest.TestCase):
 
     def test_dark_palettes_keep_all_signals_at_aa(self):
         # regression guard: the dark palettes hit full 4.5 AA on every signal.
-        for name in ("paprika", "ocean", "vivid", "reef", "neon"):
+        for name in ("paprika", "ember", "sunset", "amber", "terracotta", "rose", "reef", "neon"):
             palette = theme._PALETTES[name]
             for role in ("accent", "success", "warning"):
                 self.assertGreaterEqual(
@@ -103,9 +106,10 @@ class PaletteTests(unittest.TestCase):
                 f"{name}.text must stay AAA-grade body text",
             )
 
-    def test_vivid_has_a_true_red_danger(self):
-        r, g, b = (int(theme._PALETTES["vivid"]["danger"].lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
-        self.assertTrue(r > g and r > b, "vivid danger should be an unambiguous red")
+    def test_every_palette_has_a_true_red_danger(self):
+        for name, palette in theme._PALETTES.items():
+            r, g, b = (int(palette["danger"].lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+            self.assertTrue(r > g and r > b, f"{name} danger {palette['danger']} should be an unambiguous red")
 
 
 class ThemeHelperTests(unittest.TestCase):
@@ -113,16 +117,19 @@ class ThemeHelperTests(unittest.TestCase):
         theme.set_theme("paprika")
 
     def test_available_themes_lists_all_palettes(self):
-        self.assertEqual(set(theme.available_themes()), {"paprika", "ocean", "vivid", "reef", "neon", "light"})
+        self.assertEqual(
+            set(theme.available_themes()),
+            {"paprika", "ember", "sunset", "amber", "terracotta", "rose", "reef", "neon", "light"},
+        )
 
     def test_is_known_theme(self):
-        self.assertTrue(theme.is_known_theme("Ocean"))   # case-insensitive
+        self.assertTrue(theme.is_known_theme("Ember"))   # case-insensitive
         self.assertFalse(theme.is_known_theme("bogus"))
         self.assertFalse(theme.is_known_theme(""))
 
     def test_active_theme_name_tracks_set_theme(self):
-        theme.set_theme("vivid")
-        self.assertEqual(theme.active_theme_name(), "vivid")
+        theme.set_theme("ember")
+        self.assertEqual(theme.active_theme_name(), "ember")
         theme.set_theme("paprika")
         self.assertEqual(theme.active_theme_name(), "paprika")
 
@@ -138,8 +145,8 @@ class ThemePersistenceTests(unittest.TestCase):
     def test_save_then_load_roundtrip(self):
         path = self._settings()
         try:
-            preferences.save_theme_preference("Ocean", path=path)
-            self.assertEqual(preferences.load_theme_preference(path=path), "ocean")
+            preferences.save_theme_preference("Ember", path=path)
+            self.assertEqual(preferences.load_theme_preference(path=path), "ember")
         finally:
             path.unlink(missing_ok=True)
 
@@ -154,8 +161,8 @@ class ThemePersistenceTests(unittest.TestCase):
         path = self._settings()
         try:
             preferences.save_model_preference("gemma", resolved_model="gemma-4-26b-a4b-it", path=path)
-            preferences.save_theme_preference("vivid", path=path)
-            self.assertEqual(preferences.load_theme_preference(path=path), "vivid")
+            preferences.save_theme_preference("ember", path=path)
+            self.assertEqual(preferences.load_theme_preference(path=path), "ember")
             self.assertEqual(preferences.load_model_preference(path=path)["raw_model"], "gemma")
         finally:
             path.unlink(missing_ok=True)
@@ -191,12 +198,12 @@ class StartupThemeApplicationTests(unittest.TestCase):
             path.unlink(missing_ok=True)
 
     def test_saved_theme_is_applied_at_startup(self):
-        self.assertEqual(self._run("vivid"), "vivid")
+        self.assertEqual(self._run("ember"), "ember")
         self.handler.refresh_theme.assert_called_once()
 
     def test_env_var_overrides_saved_theme(self):
         # SECOPS_THEME is the explicit override -> saved pref is ignored (early return)
-        self.assertEqual(self._run("vivid", env_theme="ocean"), "paprika")
+        self.assertEqual(self._run("ember", env_theme="sunset"), "paprika")
         self.handler.refresh_theme.assert_not_called()
 
     def test_no_saved_theme_leaves_default(self):
@@ -212,7 +219,7 @@ class LightThemeTests(unittest.TestCase):
 
     def test_light_is_flagged_light_dark_palettes_are_not(self):
         self.assertTrue(theme.is_light_theme("light"))
-        for name in ("paprika", "ocean", "vivid", "reef", "neon"):
+        for name in ("paprika", "ember", "sunset", "amber", "terracotta", "rose", "reef", "neon"):
             self.assertFalse(theme.is_light_theme(name), name)
 
     def test_light_ground_is_white_dark_ground_is_dark(self):
@@ -256,25 +263,25 @@ class ThemePickerLinesTests(unittest.TestCase):
 
     def test_lists_every_palette_and_marks_active(self):
         joined = "\n".join(self._lines(0, active="paprika"))
-        for name in ("paprika", "ocean", "vivid", "reef", "neon", "light"):
+        for name in ("paprika", "ember", "sunset", "amber", "terracotta", "rose", "reef", "neon", "light"):
             self.assertIn(name, joined)
         self.assertIn("(current)", joined)
 
     def test_cursor_marks_the_selected_row(self):
-        lines = self._lines(2)  # vivid
+        lines = self._lines(2)  # sunset
         selected_rows = [ln for ln in lines if ln.startswith("> ")]
         self.assertEqual(len(selected_rows), 1)
-        self.assertIn("vivid", selected_rows[0])
+        self.assertIn("sunset", selected_rows[0])
 
     def test_preview_uses_the_selected_palettes_accent(self):
         # reef accent #43aa8b -> ANSI 67;170;139 appears in the coloured preview
-        joined = "\n".join(self._lines(3))  # reef
+        joined = "\n".join(self._lines(6))  # reef
         self.assertIn("67;170;139", joined)
 
     def test_light_preview_paints_a_white_ground(self):
         # the light palette preview must sit on an explicit white background so its
         # dark signals stay visible on a dark terminal (48;2;255;255;255 = bg white)
-        joined = "\n".join(self._lines(5))  # light
+        joined = "\n".join(self._lines(8))  # light
         self.assertIn("48;2;255;255;255", joined)
 
     def test_dark_preview_paints_the_dark_ground(self):
@@ -282,9 +289,14 @@ class ThemePickerLinesTests(unittest.TestCase):
         self.assertIn("48;2;24;24;27", joined)
 
     def test_neon_preview_uses_its_hot_pink_error(self):
-        # neon (index 4) error #ff206e -> ANSI 255;32;110 in the coloured preview
-        joined = "\n".join(self._lines(4))
+        # neon (index 7) error #ff206e -> ANSI 255;32;110 in the coloured preview
+        joined = "\n".join(self._lines(7))
         self.assertIn("255;32;110", joined)
+
+    def test_warm_preview_uses_the_ember_accent(self):
+        # ember (index 1) accent #f2884e -> ANSI 242;136;78 in the coloured preview
+        joined = "\n".join(self._lines(1))
+        self.assertIn("242;136;78", joined)
 
     def test_plain_text_without_colour(self):
         joined = "\n".join(self._lines(0, force_color=False))
@@ -323,8 +335,8 @@ class ThemePickerLoopTests(unittest.TestCase):
         self.assertEqual(self._run(["enter"]), "paprika")
 
     def test_down_navigates_then_enter(self):
-        # paprika -> ocean -> vivid
-        self.assertEqual(self._run(["down", "down", "enter"]), "vivid")
+        # paprika -> ember -> sunset
+        self.assertEqual(self._run(["down", "down", "enter"]), "sunset")
 
     def test_up_wraps_to_last(self):
         # from paprika, up wraps to the last palette (light)

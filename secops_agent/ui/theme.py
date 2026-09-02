@@ -42,19 +42,43 @@ _PALETTES = {
         "error": "#e4572e", "danger": "#e4572e", "danger_bright": "#ff6f42",
         "tool_border": "#3b4668",
     },
-    # Ocean — cool, calm: sky accent, teal/yellow/pumpkin signals.
-    "ocean": {
-        **_TEXT, "accent": "#3da5d9", "accent_bright": "#6fc0e8",
-        "success": "#73bfb8", "warning": "#fec601",
-        "error": "#ea7317", "danger": "#ea7317", "danger_bright": "#ff9440",
-        "tool_border": "#2364aa",
+    # ── Warm palettes (Material 3-derived: accent at ~tone 80 on the dark
+    # surface; every signal verified >= 4.5 on the dark ground). ──
+    # Ember — burnt-orange accent, gold warning, warm red. Cosy and energetic.
+    "ember": {
+        **_TEXT, "accent": "#f2884e", "accent_bright": "#ff9f6b",
+        "success": "#a3c77d", "warning": "#f4cf5e",
+        "error": "#ef5a4c", "danger": "#ef5a4c", "danger_bright": "#ff7060",
+        "tool_border": "#4a3f36",
     },
-    # Vivid — bold: teal accent, fern/saffron and an unambiguous red for danger.
-    "vivid": {
-        **_TEXT, "accent": "#08bdbd", "accent_bright": "#43d6d6",
-        "success": "#29bf12", "warning": "#ff9914",
-        "error": "#f21b3f", "danger": "#f21b3f", "danger_bright": "#ff4864",
-        "tool_border": "#2a6b6b",
+    # Sunset — vivid peach/orange accent, gold warning, coral red.
+    "sunset": {
+        **_TEXT, "accent": "#ff9e64", "accent_bright": "#ffb98a",
+        "success": "#b0c877", "warning": "#ffd166",
+        "error": "#f2635a", "danger": "#f2635a", "danger_bright": "#ff7d70",
+        "tool_border": "#4a3b34",
+    },
+    # Amber — warm gold accent, amber warning, warm red. Bright and inviting.
+    "amber": {
+        **_TEXT, "accent": "#e8b04b", "accent_bright": "#ffcf6d",
+        "success": "#9fc46b", "warning": "#f2b134",
+        "error": "#ef6a4d", "danger": "#ef6a4d", "danger_bright": "#ff8163",
+        "tool_border": "#4a4234",
+    },
+    # Terracotta — earthy clay accent, ochre warning, brick red. Muted and warm.
+    "terracotta": {
+        **_TEXT, "accent": "#e69a6b", "accent_bright": "#f2b085",
+        "success": "#9bb168", "warning": "#e6b450",
+        "error": "#e06a52", "danger": "#e06a52", "danger_bright": "#ff8468",
+        "tool_border": "#4d4038",
+    },
+    # Rose — warm pink accent (very distinct from the gold warning / red error),
+    # sage success. Warm without reading as orange.
+    "rose": {
+        **_TEXT, "accent": "#f2879b", "accent_bright": "#ffa5b4",
+        "success": "#a7c98a", "warning": "#f4c56a",
+        "error": "#ef5470", "danger": "#ef5470", "danger_bright": "#ff6f88",
+        "tool_border": "#4d3a40",
     },
     # Reef — balanced, diverse (from the 7-colour set): seagrass accent, a fern
     # success, gold warning and a coral red. Every signal >= 4.5 on the dark ground.
@@ -86,7 +110,9 @@ _DEFAULT_THEME = "paprika"
 
 # Ground each palette is tuned for (contrast reference + light/dark awareness).
 _PALETTE_GROUND = {
-    "paprika": _DARK_GROUND, "ocean": _DARK_GROUND, "vivid": _DARK_GROUND,
+    "paprika": _DARK_GROUND,
+    "ember": _DARK_GROUND, "sunset": _DARK_GROUND, "amber": _DARK_GROUND,
+    "terracotta": _DARK_GROUND, "rose": _DARK_GROUND,
     "reef": _DARK_GROUND, "neon": _DARK_GROUND, "light": _LIGHT_GROUND,
 }
 
