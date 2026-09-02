@@ -720,9 +720,25 @@ class SecOpsAgent:
         return self.autonomy.label
 
     def current_phase(self) -> str:
-        """Current mission phase name, or '' when no mission is active (G4)."""
+        """Current mission phase name, or '' when no mission is active (G4).
+
+        A fresh session sits in the SCOPING default with nothing to scope yet, so
+        reporting "scoping" would mislabel a chat/knowledge turn as mission scoping
+        (the spinner would read "Scoping the mission"). Report no phase until the
+        mission actually has something — a target, host, service, finding, or
+        explicit scope — so an empty session shows a neutral thinking label."""
         mission = self._mission()
         if mission is None:
+            return ""
+        scope = getattr(mission, "scope", None)
+        has_engagement = bool(
+            getattr(mission, "targets", None)
+            or getattr(mission, "hosts", None)
+            or getattr(mission, "services", None)
+            or getattr(mission, "findings", None)
+            or (scope and getattr(scope, "in_scope", None))
+        )
+        if not has_engagement:
             return ""
         phase = getattr(mission, "phase", None)
         return phase.value if hasattr(phase, "value") else str(phase or "")
@@ -1220,6 +1236,13 @@ class SecOpsAgent:
         # capability. Do not suggest a generic shell/webshell as a substitute;
         # the remaining workflow is evidence review, remediation, and /report.
         if self._post_exploitation_boundary_active():
+            return []
+        # A conceptual/knowledge question ("qu'est-ce que la reconnaissance") is
+        # asking for an explanation, not an action — expose NO tools so the model
+        # answers from its own knowledge instead of scoping a mission or running
+        # recon on a nonexistent target. (Unlike the autonomy-withheld case, there
+        # is no task to act on here, so an empty schema cannot "hijack" the turn.)
+        if getattr(decision, "conceptual", False):
             return []
         # AutonomyPolicy (§7): withhold exploitation/destructive tool schemas
         # until the user has approved a plan. The PermissionEngine still gates
@@ -2257,6 +2280,7 @@ class SecOpsAgent:
                 if (
                     tools_were_offered
                     and not announced_action_retry_used
+                    and not getattr(request_decision, "conceptual", False)
                     and self._announces_unexecuted_action(current_response_text)
                 ):
                     announced_action_retry_used = True

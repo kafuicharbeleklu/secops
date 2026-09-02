@@ -60,6 +60,9 @@ SECOPS_SYSTEM_INSTRUCTION = (
     "- Never print `[Archived tool call/result: ...]` markers.\n\n"
 
     "## Acting\n"
+    "- **Conceptual / definitional question** (\"what is X\", \"explain Y\", \"qu'est-ce que…\") with no "
+    "concrete target → answer directly from your own knowledge. Do NOT scope a mission, do NOT call a "
+    "tool, do NOT ask for a target. Just give the explanation.\n"
     "- Narrow question → call only the tool needed, then report. Don't run unrelated tools.\n"
     "- Broader recon → propose bounded next steps before fanning out.\n"
     "- **In authorized labs, once the user approves an exploitation plan, execute the full chain "

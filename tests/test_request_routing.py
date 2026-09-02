@@ -470,6 +470,35 @@ class SafeBaselineToolExposureTests(unittest.TestCase):
         self.assertEqual(names[0], "ping_host")
         self.assertLess(names.index("nmap_scan"), names.index("hash_identify"))
 
+    def test_conceptual_question_is_answer_only_and_exposes_no_tools(self):
+        from secops_agent.core.request_context import (
+            RequestRisk, UserIntent, classify_request,
+        )
+
+        agent = self._agent()
+        # A definitional question with no target: keyword "reconnaissance" would
+        # otherwise force a RECONNAISSANCE mission + 7-tool recon schema.
+        decision = classify_request("En une phrase, qu'est-ce que la reconnaissance en pentest ?")
+        self.assertTrue(decision.conceptual)
+        self.assertEqual(decision.user_intent, UserIntent.ANSWER_QUESTION)
+        self.assertEqual(decision.risk, RequestRisk.PASSIVE)
+        self.assertEqual(agent._tools_schema_for_decision(decision), [])
+
+        # "c'est quoi un exploit" must not be classified as an EXPLOIT risk turn.
+        exploit_q = classify_request("c'est quoi un exploit ?")
+        self.assertTrue(exploit_q.conceptual)
+        self.assertEqual(exploit_q.risk, RequestRisk.PASSIVE)
+
+    def test_question_with_a_concrete_target_keeps_the_normal_path(self):
+        from secops_agent.core.request_context import classify_request
+
+        agent = self._agent()
+        # A concrete IP means it is about a real target — NOT conceptual.
+        decision = classify_request("qu'est-ce qui tourne sur 10.10.10.5 ?")
+        self.assertFalse(decision.conceptual)
+        names = {s["name"] for s in agent._tools_schema_for_decision(decision)}
+        self.assertIn("nmap_scan", names)
+
     def test_unapproved_exploit_exposes_safe_baseline_not_offensive_primitives(self):
         from secops_agent.core.request_context import classify_request
 

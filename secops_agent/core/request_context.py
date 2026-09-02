@@ -72,6 +72,7 @@ class RequestDecision:
     scope_status: ScopeStatus = ScopeStatus.MISSING
     environment_hint: EnvironmentHint = EnvironmentHint.UNKNOWN
     target: str = ""
+    conceptual: bool = False
     reasons: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -92,6 +93,7 @@ class RequestDecision:
             "environment_hint": self.environment_hint.value,
             "target": self.target,
             "focused_answer_turn": self.should_suppress_followups,
+            "conceptual_question": self.conceptual,
         }
 
 
@@ -221,6 +223,16 @@ def classify_request(user_input: str, mission: Any | None = None) -> RequestDeci
     if scope_status != ScopeStatus.MISSING:
         reasons.append(f"scope:{scope_status.value}")
 
+    # A conceptual/knowledge question ("qu'est-ce que X", "explain Y") with no
+    # concrete target is asking the agent to EXPLAIN, not to act. Keyword goals
+    # (reconnaissance/exploit/report) otherwise force it into a mission frame with
+    # an offensive schema; mark it so the loop answers from knowledge instead.
+    conceptual = _is_conceptual_question(text, target)
+    if conceptual:
+        user_intent = UserIntent.ANSWER_QUESTION
+        risk = RequestRisk.PASSIVE
+        reasons.append("conceptual_question")
+
     return RequestDecision(
         technical_goal=technical_goal,
         user_intent=user_intent,
@@ -228,8 +240,32 @@ def classify_request(user_input: str, mission: Any | None = None) -> RequestDeci
         scope_status=scope_status,
         environment_hint=environment_hint,
         target=target,
+        conceptual=conceptual,
         reasons=tuple(reasons),
     )
+
+
+_CONCEPTUAL_QUESTION_MARKERS: tuple[str, ...] = (
+    "qu'est-ce que", "qu'est ce que", "qu est ce que", "quest ce que",
+    "c'est quoi", "c est quoi", "cest quoi",
+    "explique", "explication", "explain", "explanation",
+    "what is", "what's", "whats", "what are", "what does",
+    "define ", "definis", "definir", "definition",
+    "a quoi sert", "en quoi consiste", "comment fonctionne", "comment marche",
+    "difference entre", "quelle est la difference", "difference between",
+    "how does", "how do ",
+)
+
+
+def _is_conceptual_question(text: str, target: str) -> bool:
+    """True for a definitional/explanatory/meta question with no concrete target.
+
+    A concrete IP/URL/domain in the request means it is about a real target
+    (e.g. "qu'est-ce qui tourne sur 10.10.10.5") and must keep the normal path."""
+    if target:
+        return False
+    normalized = text.replace("’", "'")
+    return _contains_any(normalized, _CONCEPTUAL_QUESTION_MARKERS)
 
 
 def _plain(text: str) -> str:
