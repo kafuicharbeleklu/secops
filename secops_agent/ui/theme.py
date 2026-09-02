@@ -20,15 +20,22 @@ from secops_agent.ui import layout
 # share light text greys (_TEXT); the light palette flips to dark text (_TEXT_LIGHT)
 # for a light terminal. Select with SECOPS_THEME or /theme.
 
-# Dark-ground text greys (light-on-dark).
+# Dark-ground text greys (light-on-dark) + ground-derived signal tints. The tints
+# (diff line backgrounds, input-frame fill, and the dark fg used over the warning
+# highlight) depend only on the ground, so they live here and spread into every
+# dark palette — no colour literal is left at the call site (P4).
 _TEXT = {
     "text": "#e4e4e7", "text_secondary": "#a1a1aa", "text_muted": "#82828b",
     "text_dim": "#3f3f46", "tool_name": "#e4e4e7",
+    "diff_add_bg": "#14311f", "diff_remove_bg": "#3a1414",
+    "input_frame_bg": "#1f1f27", "on_warning": "#18181b",
 }
-# Light-ground text greys (dark-on-light) for a light terminal.
+# Light-ground text greys (dark-on-light) + tints for a light terminal.
 _TEXT_LIGHT = {
     "text": "#18181b", "text_secondary": "#3f3f46", "text_muted": "#52525b",
     "text_dim": "#a1a1aa", "tool_name": "#18181b",
+    "diff_add_bg": "#dcfce7", "diff_remove_bg": "#fee2e2",
+    "input_frame_bg": "#eceef3", "on_warning": "#18181b",
 }
 
 # Reference grounds used to reason about (and test) contrast per palette.
@@ -220,16 +227,48 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return int(h[:2], 16), int(h[2:4], 16), int(h[4:], 16)
 
 
-def color_enabled() -> bool:
-    """Honour the NO_COLOR / CLICOLOR conventions for raw-ANSI output (X-02).
+def _srgb_linear(channel: int) -> float:
+    """Linearize one 0-255 sRGB channel (WCAG 2.1 relative-luminance step)."""
+    c = channel / 255.0
+    return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
 
-    Rich already strips colour under NO_COLOR for its own rendering; this covers
-    the raw-ANSI surfaces (approval prompt, menus, sudo prompt) that build escape
-    codes directly through ``ansi()`` / ``ansi_hex()``.
+
+def relative_luminance(hex_color: str) -> float:
+    """WCAG 2.1 relative luminance of a hex colour (0.0 black .. 1.0 white)."""
+    r, g, b = _hex_to_rgb(hex_color)
+    return 0.2126 * _srgb_linear(r) + 0.7152 * _srgb_linear(g) + 0.0722 * _srgb_linear(b)
+
+
+def contrast_ratio(fg: str, bg: str) -> float:
+    """WCAG 2.1 contrast ratio between two hex colours (1.0 .. 21.0). Symmetric.
+
+    Thresholds used across the theme: >= 4.5 for normal text, >= 3.0 for large text
+    / non-text UI (glyphs, borders). See scratch/contrast_report.py for the report
+    across every palette on its tuned ground (dark and light)."""
+    l1, l2 = relative_luminance(fg), relative_luminance(bg)
+    lighter, darker = max(l1, l2), min(l1, l2)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def color_enabled() -> bool:
+    """Honour the NO_COLOR / FORCE_COLOR / CLICOLOR conventions for raw-ANSI output
+    (X-02 / P4), matching Rich's behaviour on the main Console so the raw-ANSI
+    surfaces (approval prompt, menus, sudo prompt) that build escape codes directly
+    through ``ansi()`` / ``ansi_hex()`` agree with the Rich-rendered transcript.
+
+    Precedence: CLICOLOR_FORCE / FORCE_COLOR force colour on; a NON-EMPTY NO_COLOR
+    (per no-color.org — ``NO_COLOR=`` empty does not disable) or ``CLICOLOR=0``
+    disable it; otherwise colour is on.
     """
+    # Force flags win first (CLICOLOR spec: CLICOLOR_FORCE overrides NO_COLOR;
+    # FORCE_COLOR mirrors Rich's force on the main Console).
     if os.environ.get("CLICOLOR_FORCE", "") not in ("", "0"):
         return True
-    if os.environ.get("NO_COLOR") is not None:
+    if os.environ.get("FORCE_COLOR", "") not in ("", "0"):
+        return True
+    # NO_COLOR disables colour only for a NON-EMPTY value (no-color.org / Rich):
+    # `NO_COLOR=` (empty) does NOT disable, matching Rich's main-Console behaviour.
+    if os.environ.get("NO_COLOR", "") != "":
         return False
     if os.environ.get("CLICOLOR") == "0":
         return False

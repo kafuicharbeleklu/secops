@@ -13,7 +13,7 @@ from rich.markup import escape
 
 from secops_agent.core.tools import ToolResult, ToolRiskClass, registry as tool_registry
 from secops_agent.core.permissions import ApprovalDecision, ApprovalScope, PermissionResource
-from secops_agent.ui.theme import COLORS
+from secops_agent.ui.theme import COLORS, color_enabled
 from secops_agent.ui import layout
 from secops_agent.ui.spool_display import should_show_spool_reference, spool_reference
 
@@ -341,22 +341,41 @@ def _compact_args_summary(tool_name: str, arguments: Dict[str, Any]) -> str:
     return value
 
 
-def _tool_status_color(status: str = "", permission: str = "", is_dangerous: bool = False) -> str:
+def _status_role(status: str = "", permission: str = "", is_dangerous: bool = False) -> str:
+    """The semantic colour ROLE for a tool state — the single classifier shared by
+    the bullet colour (:func:`_tool_status_color`) and the no-colour glyph fallback
+    (:func:`_tool_status_marker`), so both always agree on the state."""
     normalized = (status or permission or "").strip().lower()
     if normalized in {"success", "succeeded", "done", "completed", "complete", "allow", "allowed"}:
-        return COLORS["success"]
+        return "success"
     if normalized in {"error", "failed", "failure", "cancelled", "canceled", "interrupted", "deny", "denied"}:
-        return COLORS["error"]
+        return "error"
     if normalized in {"pending", "running", "started", "warning", "ask", "review", "approval"} or is_dangerous:
-        return COLORS["warning"]
-    return COLORS["accent"]
+        return "warning"
+    return "accent"
+
+
+def _tool_status_color(status: str = "", permission: str = "", is_dangerous: bool = False) -> str:
+    return COLORS[_status_role(status=status, permission=permission, is_dangerous=is_dangerous)]
+
+
+# P4 "never colour-only": when colour is disabled (NO_COLOR / monochrome) the state
+# cannot ride on the bullet's colour, so the same state map drives a distinct GLYPH.
+_STATUS_GLYPH_NO_COLOR = {"success": "✔", "error": "✗", "warning": "◐", "accent": "○"}
 
 
 def _tool_status_marker(status: str = "", permission: str = "", is_dangerous: bool = False) -> str:
-    # Claude Code parity (DESIGN_SPEC `glyph.turn_bullet` = ⏺ U+23FA): tool rows
-    # always use the record bullet "⏺". State is encoded by COLOUR, not by the
-    # glyph — yellow while pending/running, green on success, red on error — with
-    # an animated spinner shown separately during active execution.
+    # Claude Code parity (DESIGN_SPEC `glyph.turn_bullet` = ⏺ U+23FA): tool rows use
+    # the record bullet "⏺" with the state encoded by COLOUR (§4.2) — yellow while
+    # pending/running, green on success, red on error — plus a spinner during
+    # active execution.
+    #
+    # Colour must never be the SOLE state signal (P4): when colour is disabled
+    # (NO_COLOR / monochrome) the same state map drives a distinct glyph so
+    # success/error/running stay distinguishable without colour.
+    if not color_enabled():
+        role = _status_role(status=status, permission=permission, is_dangerous=is_dangerous)
+        return _STATUS_GLYPH_NO_COLOR.get(role, "○")
     return "⏺"
 
 
@@ -838,13 +857,10 @@ class ToolCallBox:
 
 def _diff_bg(added: bool) -> str:
     """Theme-aware background for a diff line (Claude-Code style): green for an
-    addition, red for a removal — a dark tint on the dark palettes, a light tint
-    on the light theme so the foreground stays readable."""
-    from secops_agent.ui.theme import active_theme_name, is_light_theme
-
-    if is_light_theme(active_theme_name()):
-        return "#dcfce7" if added else "#fee2e2"
-    return "#14311f" if added else "#3a1414"
+    addition, red for a removal — the ``diff_add_bg`` / ``diff_remove_bg`` token
+    from the active palette (a dark tint on the dark palettes, a light tint on the
+    light theme so the foreground stays readable). No colour literal here (P4)."""
+    return COLORS["diff_add_bg" if added else "diff_remove_bg"]
 
 
 def _drop_trailing_zero_exit(output: str) -> str:

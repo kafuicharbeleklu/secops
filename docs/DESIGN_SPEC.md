@@ -192,12 +192,18 @@ une valeur concrète (§4.4).
 
 ### 4.2 État → couleur du glyphe de puce (`color.state_map`)
 
-| État | Couleur de `glyph.turn_bullet` |
-|------|-------------------------------|
-| repos / neutre | `color.accent` |
-| en cours / en attente / risque | `color.warning` |
-| succès | `color.success` |
-| échec / annulé / refusé | `color.error` |
+| État | Couleur de `glyph.turn_bullet` | Glyphe de repli sans couleur (`color.state_glyph`) |
+|------|-------------------------------|---------------------------------------------------|
+| repos / neutre | `color.accent` | `○` (U+25CB) |
+| en cours / en attente / risque | `color.warning` | `◐` (U+25D0) |
+| succès | `color.success` | `✔` (U+2714) |
+| échec / annulé / refusé | `color.error` | `✗` (U+2717) |
+
+**Règle anti-couleur-seule (`color.never_color_only`, P4) :** la couleur n'est
+**jamais** le seul porteur de l'état. Quand la couleur est désactivée (`NO_COLOR`,
+mode monochrome), l'état de la puce d'appel est porté par le **glyphe** de repli
+ci-dessus (`color.state_glyph`) au lieu du `⏺` uniforme ; le mapping état→glyphe
+dérive du même classifieur d'état que le mapping état→couleur.
 
 ### 4.3 Emphase et diff — règles anti-décoration
 

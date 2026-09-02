@@ -301,7 +301,7 @@ def build_theme_picker_lines(
     selected = min(max(0, selected), len(names) - 1)
     W = max(20, width - 1)
     reset = theme.ANSI_RESET if theme.color_enabled() else ""
-    muted = theme.ansi_hex("#82828b")
+    muted = theme.ansi("text_muted")  # P4: token, not a hardcoded hex
 
     lines = ["", _fit("Choose a theme", W), ""]
 

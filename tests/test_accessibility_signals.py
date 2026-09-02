@@ -23,7 +23,7 @@ from secops_agent.ui.theme import ansi, ansi_hex, color_enabled, reduced_motion
 @contextlib.contextmanager
 def env(**overrides):
     """Isolate the accessibility env vars, then apply overrides (restored on exit)."""
-    keys = ("NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "SECOPS_REDUCED_MOTION")
+    keys = ("NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "SECOPS_REDUCED_MOTION")
     with patch.dict(os.environ, {}, clear=False):
         for key in keys:
             os.environ.pop(key, None)
@@ -53,6 +53,55 @@ class ColorConventionTests(unittest.TestCase):
         with env(NO_COLOR="1", CLICOLOR_FORCE="1"):
             self.assertTrue(color_enabled())
             self.assertTrue(ansi("success"))
+
+    def test_force_color_enables_and_overrides_no_color(self):
+        # P4: FORCE_COLOR mirrors Rich's force on the main Console for raw-ANSI too.
+        with env(FORCE_COLOR="1"):
+            self.assertTrue(color_enabled())
+        with env(NO_COLOR="1", FORCE_COLOR="1"):
+            self.assertTrue(color_enabled())
+
+    def test_empty_no_color_does_not_disable(self):
+        # no-color.org / Rich: NO_COLOR must be NON-EMPTY to disable colour.
+        with env(NO_COLOR=""):
+            self.assertTrue(color_enabled())
+
+
+class NeverColorOnlyTests(unittest.TestCase):
+    """P4: state must never be carried by colour alone — the tool bullet falls back
+    to a distinct glyph per state when colour is disabled."""
+
+    def test_bullet_is_record_glyph_when_colour_enabled(self):
+        from secops_agent.ui.tool_display import _tool_status_marker
+        with env():
+            for status in ("success", "error", "running", ""):
+                self.assertEqual(_tool_status_marker(status=status), "⏺")
+
+    def test_bullet_glyph_encodes_state_when_colour_disabled(self):
+        from secops_agent.ui.tool_display import _tool_status_marker
+        with env(NO_COLOR="1"):
+            success = _tool_status_marker(status="success")
+            error = _tool_status_marker(status="error")
+            running = _tool_status_marker(status="running")
+            idle = _tool_status_marker(status="")
+        # Each state gets a DISTINCT non-⏺ glyph, so success/error/running are
+        # distinguishable without any colour.
+        glyphs = {success, error, running, idle}
+        self.assertEqual(len(glyphs), 4)
+        self.assertNotIn("⏺", glyphs)
+
+
+class SemanticColourTokenTests(unittest.TestCase):
+    """P4: the colour literals that used to be hardcoded are now palette tokens."""
+
+    def test_new_tokens_present_in_every_palette(self):
+        from secops_agent.ui import theme as T
+        for name in T.available_themes():
+            palette = T._PALETTES[name]
+            for token in ("diff_add_bg", "diff_remove_bg", "input_frame_bg", "on_warning"):
+                with self.subTest(palette=name, token=token):
+                    self.assertIn(token, palette)
+                    self.assertRegex(palette[token], r"^#[0-9a-fA-F]{6}$")
 
 
 class ReducedMotionTests(unittest.TestCase):

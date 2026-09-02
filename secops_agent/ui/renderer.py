@@ -204,9 +204,7 @@ def _user_turn_bg() -> str:
     just enough to read as "my input" without competing with tool cards. The fg
     colours (accent / accent_bright) stay well above 4.5:1 on either tint.
     """
-    from secops_agent.ui.theme import active_theme_name, is_light_theme
-
-    return "#eceef3" if is_light_theme(active_theme_name()) else "#1f1f27"
+    return COLORS["input_frame_bg"]  # ground-appropriate tint from the active palette (P4)
 
 
 def _tool_output_lines(result: Any) -> list[str]:
@@ -260,7 +258,7 @@ def _search_terms_from_arguments(arguments: dict[str, Any] | None) -> list[str]:
 def _match_highlight_style() -> str:
     """A search-hit style: dark text on the theme's warning (amber) background,
     like Claude Code's matched-term highlight."""
-    return f"bold #18181b on {COLORS['warning']}"
+    return f"bold {COLORS['on_warning']} on {COLORS['warning']}"
 
 
 def highlight_terms(text: str, terms: list[str], style: str) -> str:

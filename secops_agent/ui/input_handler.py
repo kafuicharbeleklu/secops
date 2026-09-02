@@ -769,7 +769,7 @@ def _show_ctrl_o_surface(memory: Any | None, runtime: Any | None, console: Any |
     has_anchor = bool(str(getattr(runtime, "ctrl_o_anchor_collapsed", "") or ""))
     if memory is not None and (not has_current_transcript or has_anchor):
         if console and not bool(getattr(console, "is_terminal", False)):
-            console.print("\n\x1b[90m⎿  Nothing to expand yet.\x1b[m")
+            console.print(f"\n[{COLORS['text_muted']}]⎿  Nothing to expand yet.[/{COLORS['text_muted']}]")
         return "none"
 
     artifact = _latest_expandable_artifact(runtime)
@@ -791,7 +791,7 @@ def _show_ctrl_o_surface(memory: Any | None, runtime: Any | None, console: Any |
         return "tool-output"
 
     if console and not bool(getattr(console, "is_terminal", False)):
-        console.print("\n\x1b[90m⎿  Nothing to expand yet.\x1b[m")
+        console.print(f"\n[{COLORS['text_muted']}]⎿  Nothing to expand yet.[/{COLORS['text_muted']}]")
     return "none"
 
 
