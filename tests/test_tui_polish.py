@@ -3131,6 +3131,47 @@ class TUIPolishTests(unittest.TestCase):
         self.assertIn("#14311f", html)   # green background on the added line
         self.assertIn("#3a1414", html)   # red background on the removed line
 
+    def test_search_terms_are_highlighted_in_expanded_tool_output(self):
+        from secops_agent.ui.renderer import (
+            _build_tool_transcript_block_lines, highlight_terms,
+        )
+        from secops_agent.ui.theme import COLORS
+
+        # utility: every case-insensitive occurrence is wrapped.
+        markup = highlight_terms("Apache and apache", ["apache"], "on #f3a712")
+        self.assertEqual(markup.count("[on #f3a712]"), 2)
+
+        # a search tool's expanded output highlights its query term with the amber
+        # background (Claude-Code matched-term style).
+        item = {
+            "kind": "tool", "name": "exploit_search", "arguments": {"query": "apache"},
+            "result": ToolResult(success=True, output="line one\nApache RCE here\nline three"),
+        }
+        console = Console(width=80, record=True, force_terminal=True,
+                          color_system="truecolor", file=io.StringIO())
+        for line in _build_tool_transcript_block_lines(item, expanded=True, width=80):
+            console.print(line)
+        html = console.export_html(inline_styles=True).lower()
+        self.assertIn(COLORS["warning"].lower(), html)   # amber highlight background
+
+    def test_word_level_diff_emphasises_only_the_changed_words(self):
+        from secops_agent.ui.tool_display import _diff_bg
+
+        renderer = Renderer()
+        renderer.console = Console(width=80, record=True, force_terminal=True,
+                                   color_system="truecolor", file=io.StringIO())
+        added = renderer._diff_word_line(
+            "+    return connect(host, port=443)",
+            "-    return connect(host, port=80)",
+            minus=False, add_bg=_diff_bg(True), del_bg=_diff_bg(False), width=60,
+        )
+        renderer.console.print(added)
+        html = renderer.console.export_html(inline_styles=True).lower()
+        # the added line renders on the green background, and the changed word is
+        # emphasised (bold) — the word-level highlight.
+        self.assertIn("#14311f", html)
+        self.assertIn("font-weight: bold", html)
+
     def test_diff_render_non_git_matches_antigravity_warning_shape(self):
         if not shutil.which("git"):
             self.skipTest("git is not installed")

@@ -226,17 +226,54 @@ def _result_headline(result: Any, fallback: str) -> str:
     return fallback
 
 
-def _build_expanded_tool_result_lines(result: Any, *, width: int) -> list[str]:
+_SEARCH_ARG_KEYS = ("query", "pattern", "search", "term", "keyword", "cve_id")
+
+
+def _search_terms_from_arguments(arguments: dict[str, Any] | None) -> list[str]:
+    """Highlightable search terms from a tool's arguments (query/pattern/…), so a
+    grep/search result can emphasise what was actually matched."""
+    terms: list[str] = []
+    for key in _SEARCH_ARG_KEYS:
+        value = str((arguments or {}).get(key, "") or "").strip()
+        if value:
+            terms.extend(token for token in re.split(r"\s+", value) if len(token) >= 2)
+    return sorted(set(terms), key=len, reverse=True)[:6]
+
+
+def _match_highlight_style() -> str:
+    """A search-hit style: dark text on the theme's warning (amber) background,
+    like Claude Code's matched-term highlight."""
+    return f"bold #18181b on {COLORS['warning']}"
+
+
+def highlight_terms(text: str, terms: list[str], style: str) -> str:
+    """Rich markup for *text* (escaped) with each case-insensitive occurrence of
+    any term wrapped in *style* — the matched-term background highlight."""
+    escaped = escape(text)
+    valid = [term for term in terms if term and len(term) >= 2]
+    if not valid:
+        return escaped
+    pattern = re.compile("|".join(re.escape(escape(term)) for term in valid), re.IGNORECASE)
+    return pattern.sub(lambda match: f"[{style}]{match.group(0)}[/{style}]", escaped)
+
+
+def _build_expanded_tool_result_lines(result: Any, *, width: int, terms: list[str] | None = None) -> list[str]:
     output_lines = _tool_output_lines(result)
     first = _fit_cell(_result_headline(result, output_lines[0]), max(16, width - 34))
     lines = [f"  [{COLORS['text_muted']}]⎿  {escape(first)} (ctrl+o to collapse)[/{COLORS['text_muted']}]"]
     if len(output_lines) > 1:
         visible_limit = _ctrl_o_output_visible_limit()
         visible_lines = output_lines[:visible_limit]
+        match_style = _match_highlight_style()
+
+        def _render(line: str) -> str:
+            fitted = _fit_cell(line, max(16, width - 6))
+            return highlight_terms(fitted, terms, match_style) if terms else escape(fitted)
+
         lines.append("")
         lines.append(f"  [{COLORS['text_muted']}]Output:[/{COLORS['text_muted']}]")
         lines.extend(
-            f"    [{COLORS['text_muted']}]{escape(_fit_cell(line, max(16, width - 6)))}[/{COLORS['text_muted']}]"
+            f"    [{COLORS['text_muted']}]{_render(line)}[/{COLORS['text_muted']}]"
             for line in visible_lines
         )
         if len(output_lines) > len(visible_lines):
@@ -267,9 +304,10 @@ def _build_tool_transcript_block_lines(
 
     indicator_color = _tool_status_color(status=_tool_result_status(result))
     if expanded:
+        terms = _search_terms_from_arguments(item.get("arguments"))
         return [
             f"[{indicator_color}]●[/{indicator_color}] {call_markup}",
-            *_build_expanded_tool_result_lines(result, width=width),
+            *_build_expanded_tool_result_lines(result, width=width, terms=terms),
         ]
     return [
         f"[{indicator_color}]●[/{indicator_color}] {call_markup}{expand_suffix}",
@@ -2140,26 +2178,109 @@ class Renderer:
     def _render_patch_preview(self, patch: str, limit: int = 18) -> None:
         """Print a bounded git-patch preview with Claude-Code-style diff colouring:
         + lines on a green background, - lines on a red background, hunk (@@) and
-        file headers in muted/accent tones, context lines dim."""
+        file headers in muted/accent tones, context lines dim. Within a paired
+        -/+ modification the WORDS that actually changed are emphasised (bold) over
+        the line's background, so the exact edit stands out."""
         from secops_agent.ui.tool_display import _diff_bg
 
-        lines = [line.rstrip() for line in patch.expandtabs(4).splitlines() if line.strip()]
+        add_bg, del_bg = _diff_bg(True), _diff_bg(False)
+        pad_w = max(24, min(120, _surface_width(self.console) - 6))
+        raw = [line.rstrip() for line in patch.expandtabs(4).splitlines() if line.strip()]
         self.console.print(f"  [{COLORS['text_muted']}]Patch preview[/]")
-        for line in lines[:limit]:
-            body = escape(line[:180])
+
+        def _kind(line: str) -> str:
             if line.startswith(("+++", "---", "diff --git", "index ", "new file", "deleted file")):
+                return "header"
+            if line.startswith("@@"):
+                return "hunk"
+            if line.startswith("+"):
+                return "plus"
+            if line.startswith("-"):
+                return "minus"
+            return "context"
+
+        emitted = 0
+        index = 0
+        total = len(raw)
+        truncated = False
+        while index < total and emitted < limit:
+            line = raw[index]
+            kind = _kind(line)
+            if kind == "minus":
+                minus_run: list[str] = []
+                while index < total and _kind(raw[index]) == "minus":
+                    minus_run.append(raw[index])
+                    index += 1
+                plus_run: list[str] = []
+                while index < total and _kind(raw[index]) == "plus":
+                    plus_run.append(raw[index])
+                    index += 1
+                for offset, m_line in enumerate(minus_run):
+                    if emitted >= limit:
+                        truncated = True
+                        break
+                    counterpart = plus_run[offset] if offset < len(plus_run) else None
+                    self.console.print(self._diff_word_line(m_line, counterpart, minus=True, add_bg=add_bg, del_bg=del_bg, width=pad_w), no_wrap=True, overflow="ellipsis")
+                    emitted += 1
+                for offset, p_line in enumerate(plus_run):
+                    if emitted >= limit:
+                        truncated = True
+                        break
+                    counterpart = minus_run[offset] if offset < len(minus_run) else None
+                    self.console.print(self._diff_word_line(p_line, counterpart, minus=False, add_bg=add_bg, del_bg=del_bg, width=pad_w), no_wrap=True, overflow="ellipsis")
+                    emitted += 1
+                continue
+            body = escape(line[:180])
+            if kind == "header":
                 style = COLORS["text_muted"]
-            elif line.startswith("@@"):
+            elif kind == "hunk":
                 style = f"bold {COLORS['accent']}"
-            elif line.startswith("+"):
-                style = f"{COLORS['success']} on {_diff_bg(True)}"
-            elif line.startswith("-"):
-                style = f"{COLORS['error']} on {_diff_bg(False)}"
+            elif kind == "plus":
+                style = f"{COLORS['success']} on {add_bg}"
             else:
                 style = COLORS["text_dim"]
             self.console.print(f"  [{style}]{body}[/]", no_wrap=True, overflow="ellipsis")
-        if len(lines) > limit:
-            self.console.print(f"  [{COLORS['text_dim']}]... {len(lines) - limit:,} more line(s) hidden[/]")
+            emitted += 1
+            index += 1
+
+        if truncated or index < total:
+            hidden = len([line for line in raw[index:] if line.strip()]) if index < total else 0
+            self.console.print(f"  [{COLORS['text_dim']}]... {max(hidden, 1):,} more line(s) hidden[/]")
+
+    def _diff_word_line(self, line, counterpart, *, minus, add_bg, del_bg, width):
+        """Build a Rich Text for one +/- diff line. When a counterpart line is
+        present, the words that differ (vs the counterpart) are bold so the exact
+        change pops over the green/red background; unchanged words stay plain."""
+        import difflib
+        import re as _re
+        from rich.text import Text
+
+        bg = del_bg if minus else add_bg
+        fg = COLORS["error"] if minus else COLORS["success"]
+        base = f"{fg} on {bg}"
+        strong = f"bold {fg} on {bg}"
+        marker = "- " if minus else "+ "
+        body = line[1:]
+
+        text = Text("  ")  # indent carries no background
+        text.append(marker, style=base)
+        if counterpart is None:
+            text.append(body, style=base)
+        else:
+            def _toks(value: str) -> list[str]:
+                return _re.findall(r"\s+|\S+", value)
+            mine = _toks(body)
+            theirs = _toks(counterpart[1:])
+            a, b = (mine, theirs) if minus else (theirs, mine)
+            matcher = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+            for op, i1, i2, j1, j2 in matcher.get_opcodes():
+                segment = "".join((a[i1:i2] if minus else b[j1:j2]))
+                if segment:
+                    text.append(segment, style=base if op == "equal" else strong)
+        pad = width - text.cell_len
+        if pad > 0:
+            text.append(" " * pad, style=base)  # extend the background to a bar
+        return text
 
     def render_tasks(self, runtime: RuntimeState, interactive: bool = True):
         """Render background task state."""
