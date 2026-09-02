@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, List
 
 from rich.console import Console
+from secops_agent.ui import layout
 
 @dataclass(frozen=True)
 class SettingsItem:
@@ -63,20 +64,13 @@ def _turn_separator(width: int) -> str:
 
 
 def _surface_width(console: Console | None = None, default: int = 80) -> int:
-    width = console.size.width if console is not None else default
-    if sys.stdout.isatty():
-        width = min(width, shutil.get_terminal_size((width or default, 24)).columns)
-    return max(1, width)
+    """Current usable width in cells (P2: via the central layout layer)."""
+    return layout.terminal_size(console, default_width=default)[0]
 
 
 def _surface_height(console: Console | None = None, default: int = 24) -> int:
-    height = console.size.height if console is not None else default
-    if console is None or bool(getattr(console, "is_terminal", False)) or sys.stdout.isatty():
-        try:
-            height = min(height, shutil.get_terminal_size((80, height or default)).lines)
-        except Exception:
-            pass
-    return max(1, height)
+    """Current usable height in rows (P2: via the central layout layer)."""
+    return layout.terminal_size(console, default_height=default)[1]
 
 
 def _ctrl_o_output_visible_limit(console: Console | None = None, *, default: int = 40) -> int:
@@ -152,11 +146,6 @@ def _transient_content_height(terminal_height: int, *, prompt_frame: bool = Fals
 
 
 def _fit_cell(text: str, width: int) -> str:
-    if width <= 0:
-        return ""
-    if len(text) <= width:
-        return text
-    if width == 1:
-        return "…"
-    return text[: width - 1] + "…"
+    """Cell-accurate truncation (P2); delegates to the central layout layer."""
+    return layout.fit_cell(text, width)
 

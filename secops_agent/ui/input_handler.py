@@ -38,6 +38,7 @@ from secops_agent.ui.clipboard import (
 from secops_agent.ui.commands import get_command, iter_commands
 from secops_agent.ui.spool_display import supervised_detail_text
 from secops_agent.ui.theme import COLORS, pt_style_dict, friendly_model_name
+from secops_agent.ui import layout
 
 pt_prompt = importlib.import_module("prompt_toolkit.shortcuts.prompt")
 
@@ -178,13 +179,8 @@ _install_antigravity_completion_cursor()
 
 
 def _fit_text(text: str, max_width: int) -> str:
-    if max_width <= 0:
-        return ""
-    if len(text) <= max_width:
-        return text
-    if max_width <= 1:
-        return "…"
-    return text[: max_width - 1] + "…"
+    """Cell-accurate truncation (P2); delegates to the central layout layer."""
+    return layout.fit_cell(text, max_width)
 
 
 def _fit_segments(segments: list[str], max_width: int) -> str:

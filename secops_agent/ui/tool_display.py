@@ -14,6 +14,7 @@ from rich.markup import escape
 from secops_agent.core.tools import ToolResult, ToolRiskClass, registry as tool_registry
 from secops_agent.core.permissions import ApprovalDecision, ApprovalScope, PermissionResource
 from secops_agent.ui.theme import COLORS
+from secops_agent.ui import layout
 from secops_agent.ui.spool_display import should_show_spool_reference, spool_reference
 
 __all__ = [
@@ -71,14 +72,9 @@ def _strip_ansi(text: str) -> str:
 
 
 def _fit_display(text: str, width: int) -> str:
-    if width <= 0:
-        return ""
-    clean = _strip_ansi(str(text)).replace("\n", " ")
-    if len(clean) <= width:
-        return clean
-    if width <= 1:
-        return "…"
-    return clean[: width - 1] + "…"
+    """Cell-accurate truncation (P2); delegates to the central layout layer
+    (which strips ANSI and collapses newlines before measuring)."""
+    return layout.fit_cell(text, width)
 
 
 _DECORATION_CHARS = frozenset(

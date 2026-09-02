@@ -12,6 +12,7 @@ from typing import Any
 from secops_agent import __version__
 from secops_agent.core.model_catalog import model_display_name
 from rich.theme import Theme
+from secops_agent.ui import layout
 
 # ── Palettes ─────────────────────────────────────────────────────────
 # Rule: Color is a signal, not decoration. Each palette maps four signal hues
@@ -342,13 +343,8 @@ SECOPS_MONOGRAM = (
 
 
 def _fit_text(text: str, width: int) -> str:
-    if width <= 0:
-        return ""
-    if len(text) <= width:
-        return text
-    if width == 1:
-        return "…"
-    return text[: width - 1] + "…"
+    """Cell-accurate truncation (P2); delegates to the central layout layer."""
+    return layout.fit_cell(text, width)
 
 
 def get_header_banner(model_name: str = "gemini-2.5-flash") -> str:
@@ -406,7 +402,7 @@ def get_header_banner(model_name: str = "gemini-2.5-flash") -> str:
     return "\n".join(rows)
 
 
-def get_mission_box(mission: Any, model_name: str) -> str:
+def get_mission_box(mission: Any, model_name: str, width: int | None = None) -> str:
     """
     Renders the mission context box: target, phase, vpn, ports, scope, model.
     """
@@ -450,28 +446,39 @@ def get_mission_box(mission: Any, model_name: str) -> str:
 
     friendly_model = friendly_model_name(model_name)
 
-    def display_len(text: str) -> int:
-        import re
-        ansi_escape = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-        return len(ansi_escape.sub("", text))
+    # Responsive geometry (P2): everything derives from the current terminal
+    # width. Cell-accurate padding via the central layout layer keeps CJK / emoji
+    # columns aligned; the box is capped so it does not sprawl on ultra-wide
+    # terminals and collapses to a single column when too narrow for the grid.
+    if width is None:
+        width, _ = layout.terminal_size()
+    width = max(1, int(width))
+    box_w = max(24, min(width, layout.FRAME_MAX_WIDTH))
 
-    def pad_to_display_width(text: str, width: int) -> str:
-        d_len = display_len(text)
-        if d_len < width:
-            return text + " " * (width - d_len)
-        return text[:width]
+    if layout.classify(width) is layout.Breakpoint.NARROW:
+        # Single column; secondary metadata (ports / scope / model) hidden.
+        head = "── MISSION "
+        rows = [head + "─" * max(1, box_w - layout.cell_len(head))]
+        for text in (f"target  {target}", f"phase  {phase}", vpn_status):
+            rows.append(text if layout.cell_len(text) <= box_w else layout.fit_cell(text, box_w))
+        return "\n".join(rows)
 
-    line1_left = pad_to_display_width(f" target  {target}", 26)
-    line1_mid = pad_to_display_width(f"phase  {phase}", 26)
-    line1_right = pad_to_display_width(vpn_status, 24)
-    line1 = f"│{line1_left}{line1_mid}{line1_right}│"
-
-    line2_left = pad_to_display_width(f" ports   {ports_str}", 26)
-    line2_mid = pad_to_display_width(f"scope  {scope_str}", 26)
-    line2_right = pad_to_display_width(f"model  {friendly_model}", 24)
-    line2 = f"│{line2_left}{line2_mid}{line2_right}│"
-
-    border_top = "┌─ MISSION " + "─" * 65 + "┐"
-    border_bottom = "└" + "─" * 76 + "┘"
+    # Medium / wide: bordered 3-column, 2-row grid derived from the box width.
+    inner = box_w - 2
+    base = inner // 3
+    w1, w2, w3 = base, base, inner - 2 * base
+    line1 = (
+        "│" + layout.pad_cell(f" target  {target}", w1)
+        + layout.pad_cell(f"phase  {phase}", w2)
+        + layout.pad_cell(vpn_status, w3) + "│"
+    )
+    line2 = (
+        "│" + layout.pad_cell(f" ports   {ports_str}", w1)
+        + layout.pad_cell(f"scope  {scope_str}", w2)
+        + layout.pad_cell(f"model  {friendly_model}", w3) + "│"
+    )
+    title = "┌─ MISSION "
+    border_top = title + "─" * max(1, box_w - layout.cell_len(title) - 1) + "┐"
+    border_bottom = "└" + "─" * (box_w - 2) + "┘"
 
     return "\n".join([border_top, line1, line2, border_bottom])

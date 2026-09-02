@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.status import Status
 
 from secops_agent.ui.theme import COLORS, reduced_motion
+from secops_agent.ui import layout
 
 __all__ = [
     "ThinkingSpinner",
@@ -22,6 +23,7 @@ __all__ = [
     "StartupAnimation",
     "StreamingDots",
     "WAIT_TIPS",
+    "WAIT_TIPS_SHORT",
     "STARTUP_CLEAR_SEQUENCE",
     "format_wait_message",
     "wait_tip_for_elapsed",
@@ -39,15 +41,25 @@ WAIT_TIPS = (
     "/permissions reviews approvals",
     "/statusline shows runtime context",
 )
+# Abbreviated keyboard hints for narrow terminals (P2: "indices clavier abrégés").
+WAIT_TIPS_SHORT = (
+    "@path: evidence",
+    "esc: interrupt",
+    "ctrl+o: transcript",
+    "ctrl+r: artifact",
+    "/permissions",
+    "/statusline",
+)
 _TIP_INTERVAL_SECONDS = 4.0
 _TIP_DELAY_SECONDS = 2.0
 _RUNNING_LABELS = ("Running", "Running.", "Running..", "Running...")
 STARTUP_CLEAR_SEQUENCE = ""
 
 
-def wait_tip_for_elapsed(elapsed: float, *, offset: int = 0) -> str:
+def wait_tip_for_elapsed(elapsed: float, *, offset: int = 0, short: bool = False) -> str:
+    tips = WAIT_TIPS_SHORT if short else WAIT_TIPS
     index = int(max(0.0, elapsed) // _TIP_INTERVAL_SECONDS)
-    return WAIT_TIPS[(index + offset) % len(WAIT_TIPS)]
+    return tips[(index + offset) % len(tips)]
 
 
 _WAIT_WARM_SECONDS = 10.0
@@ -72,14 +84,21 @@ def format_wait_message(
     *,
     include_tip: bool = True,
     offset: int = 0,
+    width: int | None = None,
 ) -> str:
     color = wait_urgency_color(elapsed)
     if not include_tip or elapsed < _TIP_DELAY_SECONDS:
         return f"[{color}]{message}[/{color}]"
-    tip = wait_tip_for_elapsed(elapsed, offset=offset)
+    # Narrow terminals get abbreviated hints (P2); the tip line is cell-fit to
+    # the current width so it never wraps or gets cut.
+    if width is None:
+        width, _ = layout.terminal_size()
+    narrow = layout.classify(width) is layout.Breakpoint.NARROW
+    tip = wait_tip_for_elapsed(elapsed, offset=offset, short=narrow)
+    tip_line = layout.fit_cell(f"└ Tip: {tip}", max(1, width - 1))
     return (
         f"[{color}]{message}[/{color}]\n"
-        f"[{COLORS['text_dim']}]└ Tip: {tip}[/{COLORS['text_dim']}]"
+        f"[{COLORS['text_dim']}]{tip_line}[/{COLORS['text_dim']}]"
     )
 
 
@@ -105,13 +124,8 @@ SPINNERS["none"] = {
 
 
 def _fit_cell(text: str, width: int) -> str:
-    if width <= 0:
-        return ""
-    if len(text) <= width:
-        return text
-    if width == 1:
-        return "…"
-    return text[: width - 1] + "…"
+    """Cell-accurate truncation (P2); delegates to the central layout layer."""
+    return layout.fit_cell(text, width)
 
 
 import re

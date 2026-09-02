@@ -102,6 +102,7 @@ _ARCHIVED_CALL_RE = re.compile(
 
 # View builders/primitives live in secops_agent.ui.views; re-exported
 # here so existing imports and Renderer methods resolve unchanged.
+from secops_agent.ui import layout
 from secops_agent.ui.views.common import (
     SettingsItem,
     SettingsSelection,
@@ -359,6 +360,21 @@ class _StripTrailingWhitespace:
             yield Segment.line()
 
 
+def _agent_markdown(content: str, *, width: int) -> Padding:
+    """Indented agent-prose Markdown, width-capped on wide terminals (P2).
+
+    Left-indent of 2 matches the assistant narrative; on a terminal wider than
+    ``layout.TEXT_MAX_WIDTH`` the prose column is capped (extra space becomes
+    right padding, later stripped) so full-width text never sprawls illegibly."""
+    left = 2
+    inner = min(max(1, int(width) - left), layout.TEXT_MAX_WIDTH)
+    right = max(0, int(width) - left - inner)
+    return Padding(
+        Markdown(normalize_agent_markdown(content), code_theme=_CODE_THEME),
+        (0, right, 0, left),
+    )
+
+
 def _build_text_transcript_lines(content: str, *, width: int) -> list[str]:
     rendered = Console(
         width=width,
@@ -367,7 +383,7 @@ def _build_text_transcript_lines(content: str, *, width: int) -> list[str]:
         color_system=None,
         file=io.StringIO(),
     )
-    rendered.print(Padding(Markdown(normalize_agent_markdown(content), code_theme=_CODE_THEME), (0, 0, 0, 2)))
+    rendered.print(_agent_markdown(content, width=width))
     return [line.rstrip() for line in rendered.export_text().splitlines()]
 
 
@@ -3473,10 +3489,7 @@ class Renderer:
                 if content:
                     self.console.print(
                         _StripTrailingWhitespace(
-                            Padding(
-                                Markdown(normalize_agent_markdown(content), code_theme=_CODE_THEME),
-                                (0, 0, 0, 2),
-                            )
+                            _agent_markdown(content, width=_surface_width(self.console))
                         )
                     )
                     self.console.print()
@@ -4071,11 +4084,9 @@ class Renderer:
             })
 
         def _build_display(text: str):
-            """Build Antigravity-style indented Markdown display."""
-            return Padding(
-                Markdown(normalize_agent_markdown(text), code_theme=_CODE_THEME),
-                (0, 0, 0, 2),
-            )
+            """Build Antigravity-style indented Markdown display (P2: prose
+            width-capped on wide terminals via the shared helper)."""
+            return _agent_markdown(text, width=_surface_width(self.console))
 
         def _live_tail(text: str) -> str:
             try:
@@ -4083,6 +4094,17 @@ class Renderer:
             except Exception:
                 height = 0
             return _streaming_tail(text, height)
+
+        def _on_resize() -> None:
+            # Debounced SIGWINCH (P2): re-wrap the active live frame at the new
+            # terminal width immediately, without waiting for the next streamed
+            # token — so a mid-stream resize (or a stalled stream) never leaves a
+            # stale-width frame on screen. Rebuilt from the accumulator so it
+            # reflows correctly; committed scrollback relies on terminal reflow.
+            if live_display is not None:
+                with contextlib.suppress(Exception):
+                    live_display.update(_build_display(_live_tail(text_accumulator)))
+                    live_display.refresh()
 
         def _advance_ctrl_o_tail(lines: int) -> None:
             nonlocal latest_tool_tail_lines
@@ -4230,6 +4252,9 @@ class Renderer:
                 )
                 live_display.start()
 
+        resize_debouncer = layout.ResizeDebouncer(_on_resize)
+        with contextlib.suppress(Exception):
+            resize_debouncer.install(asyncio.get_running_loop())
         try:
             interrupt.start()
             async for event in _interruptible_events(event_stream, interrupt):
@@ -4580,5 +4605,7 @@ class Renderer:
             self.render_agent_error(f"Stream error: {str(e)}")
         finally:
             await interrupt.stop()
+            with contextlib.suppress(Exception):
+                resize_debouncer.uninstall()
         # Instructions typed while the agent was streaming, for the loop to queue.
         return interrupt.drain_typeahead()
