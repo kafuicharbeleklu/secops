@@ -55,12 +55,14 @@ _WAIT_URGENT_SECONDS = 30.0
 
 
 def wait_urgency_color(elapsed: float) -> str:
-    """ANIM-03: the wait indicator warms with elapsed time so a long turn reads
-    as 'still working' - muted under ~10s, amber past it, gold past ~30s."""
+    """ANIM-03: the wait indicator deepens with elapsed time so a long turn reads
+    as 'still working' — and stays inside the active palette's accent family so it
+    never looks like a different theme (a discreet muted grey under ~10s, the
+    theme accent past it, the brighter accent past ~30s)."""
     if elapsed >= _WAIT_URGENT_SECONDS:
-        return COLORS["accent"]
+        return COLORS["accent_bright"]
     if elapsed >= _WAIT_WARM_SECONDS:
-        return COLORS["warning"]
+        return COLORS["accent"]
     return COLORS["text_muted"]
 
 

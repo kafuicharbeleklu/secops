@@ -935,7 +935,12 @@ class Renderer:
     """Antigravity-style terminal renderer."""
 
     def __init__(self):
-        self.console = Console(theme=rich_theme)
+        # Read the LIVE module theme (not this module's import-time binding, which
+        # set_theme rebinds only on theme.py) so any Renderer built mid-session —
+        # e.g. the transient one behind ctrl+r — starts on the current palette.
+        from secops_agent.ui import theme as _theme_mod
+        self.console = Console(theme=_theme_mod.rich_theme)
+        self._theme_pushed = False
         self._thinking_start: float | None = None
         self._thinking_content: str = ""
         self._thinking_spinner: ThinkingSpinner | None = None
@@ -958,6 +963,20 @@ class Renderer:
             self._display_prefs: dict[str, Any] = load_display_preferences()
         except Exception:
             self._display_prefs = {}
+
+    def apply_console_theme(self, rich_theme_obj: Any) -> None:
+        """Swap the console's active theme to *rich_theme_obj* without growing the
+        theme stack. push_theme() stacks, so repeated /theme switches would pile up
+        layers (top wins, but the stack leaks). Pop our previous push first, then
+        push the current palette, so the stack stays [base, current]."""
+        try:
+            if getattr(self, "_theme_pushed", False):
+                self.console.pop_theme()
+                self._theme_pushed = False
+            self.console.push_theme(rich_theme_obj)
+            self._theme_pushed = True
+        except Exception:
+            pass
 
     # ── Static Renders ────────────────────────────────────────────────
 

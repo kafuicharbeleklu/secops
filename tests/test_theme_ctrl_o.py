@@ -72,5 +72,40 @@ class ThemeSwitchCtrlOTests(unittest.TestCase):
         self.assertEqual(runtime.ctrl_o_transcript_expanded, "")
 
 
+class ThemeSwitchConsoleTests(unittest.TestCase):
+    def setUp(self):
+        self._original = T.active_theme_name()
+
+    def tearDown(self):
+        T.set_theme(self._original)
+
+    def _stack_depth(self, renderer):
+        return len(getattr(renderer.console._theme_stack, "_entries", [None]))
+
+    def test_apply_console_theme_does_not_grow_the_stack(self):
+        T.set_theme("paprika")
+        renderer = Renderer()
+        start = self._stack_depth(renderer)
+        for name in ("neon", "ember", "sunset", "reef", "paprika"):
+            T.set_theme(name)
+            renderer.apply_console_theme(T.rich_theme)
+        # Bounded: pop-then-push keeps [base, current], never piling up per switch.
+        self.assertLessEqual(self._stack_depth(renderer), start + 1)
+
+    def test_renderer_built_after_switch_uses_current_palette(self):
+        # A Renderer created mid-session (e.g. the transient one behind ctrl+r)
+        # must start on the live palette, not this module's import-time theme.
+        T.set_theme("paprika")
+        T.set_theme("neon")
+        renderer = Renderer()
+        heading = renderer.console.get_style("markdown.h2")
+        triplet = heading.color.get_truecolor()
+        neon = T._PALETTES["neon"]["accent"].lstrip("#")
+        self.assertEqual(
+            (triplet.red, triplet.green, triplet.blue),
+            (int(neon[0:2], 16), int(neon[2:4], 16), int(neon[4:6], 16)),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

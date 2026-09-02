@@ -663,7 +663,7 @@ def _apply_startup_theme(renderer: "Renderer", input_handler: "InputHandler") ->
         return
     _theme_mod.set_theme(saved)
     try:
-        renderer.console.push_theme(_theme_mod.rich_theme)
+        renderer.apply_console_theme(_theme_mod.rich_theme)
     except Exception:
         pass
     input_handler.refresh_theme()
@@ -1467,7 +1467,7 @@ async def run_chat_loop(
                             else:
                                 resolved = _theme_mod.set_theme(picked)
                                 try:
-                                    renderer.console.push_theme(_theme_mod.rich_theme)
+                                    renderer.apply_console_theme(_theme_mod.rich_theme)
                                 except Exception:
                                     pass
                                 input_handler.refresh_theme()
@@ -1491,7 +1491,7 @@ async def run_chat_loop(
                         else:
                             resolved = _theme_mod.set_theme(requested)
                             try:
-                                renderer.console.push_theme(_theme_mod.rich_theme)
+                                renderer.apply_console_theme(_theme_mod.rich_theme)
                             except Exception:
                                 pass
                             input_handler.refresh_theme()

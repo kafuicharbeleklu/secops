@@ -19,25 +19,27 @@ from secops_agent.ui.theme import COLORS, file_link, hyperlink
 
 class WaitUrgencyTests(unittest.TestCase):
     def test_color_thresholds(self):
+        # The wait ramp stays in the accent family so it never reads as a
+        # different theme: muted grey → accent → brighter accent.
         self.assertEqual(wait_urgency_color(0), COLORS["text_muted"])
         self.assertEqual(wait_urgency_color(9.9), COLORS["text_muted"])
-        self.assertEqual(wait_urgency_color(10), COLORS["warning"])   # boundary
-        self.assertEqual(wait_urgency_color(29.9), COLORS["warning"])
-        self.assertEqual(wait_urgency_color(30), COLORS["accent"])    # boundary
+        self.assertEqual(wait_urgency_color(10), COLORS["accent"])          # boundary
+        self.assertEqual(wait_urgency_color(29.9), COLORS["accent"])
+        self.assertEqual(wait_urgency_color(30), COLORS["accent_bright"])   # boundary
 
     def test_message_colour_follows_elapsed(self):
         early = format_wait_message("Running", 5, include_tip=False)
         warm = format_wait_message("Running", 15, include_tip=False)
         urgent = format_wait_message("Running", 35, include_tip=False)
         self.assertIn(COLORS["text_muted"], early)
-        self.assertIn(COLORS["warning"], warm)
-        self.assertIn(COLORS["accent"], urgent)
+        self.assertIn(COLORS["accent"], warm)
+        self.assertIn(COLORS["accent_bright"], urgent)
         # the message text survives the recolouring
         self.assertIn("Running", warm)
 
     def test_tip_branch_still_warms(self):
         warm = format_wait_message("Running", 15, include_tip=True)
-        self.assertIn(COLORS["warning"], warm)
+        self.assertIn(COLORS["accent"], warm)
         self.assertIn("Tip:", warm)
 
 
