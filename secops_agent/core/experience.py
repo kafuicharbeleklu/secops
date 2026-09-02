@@ -118,6 +118,44 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# ── Recency weighting (learn/adapt faster) ───────────────────────────────
+# Signals and lessons decay with age so the agent weights RECENT evidence more
+# than stale evidence: a tactic that stops working is down-weighted sooner, and a
+# newly-effective one dominates once it has enough recent outcomes. This changes
+# only ranking magnitude — never the review gate, the ≥2-outcome anti-noise gate,
+# or authorization. A fresh signal has weight ~1.0, so existing (all-recent)
+# behaviour is unchanged.
+_DEFAULT_SIGNAL_HALF_LIFE_DAYS = 10.0
+_DEFAULT_LESSON_HALF_LIFE_DAYS = 45.0
+
+
+def _env_float(name: str, default: float) -> float:
+    import os
+
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _recency_weight(created_at: str, *, half_life_days: float, now: datetime | None = None) -> float:
+    """Exponential-decay weight in (0, 1] for an ISO timestamp: 1.0 when fresh,
+    0.5 after one half-life. Unparseable/absent timestamps default to 1.0 so a
+    missing date never silently erases a signal."""
+    parsed = _parse_created_at(created_at)
+    if parsed is None:
+        return 1.0
+    reference = now or datetime.now(timezone.utc)
+    age_days = (reference - parsed).total_seconds() / 86400.0
+    if age_days <= 0 or half_life_days <= 0:
+        return 1.0
+    return float(2.0 ** (-(age_days / half_life_days)))
+
+
 def _tokens(*values: Any) -> set[str]:
     text = " ".join(str(value or "") for value in values)
     return {match.group(0).casefold() for match in _TOKEN_RE.finditer(text)}
@@ -448,6 +486,12 @@ class SuggestionLearningStats:
     audit_applied: int = 0
     audit_rejected: int = 0
     audit_reasons: tuple[str, ...] = ()
+    # Recency-weighted outcome mass (fresh signal ~1.0). 0.0 means "not computed"
+    # (directly-constructed stats), which falls back to the raw integer counts.
+    weighted_selected: float = 0.0
+    weighted_ignored: float = 0.0
+    weighted_succeeded: float = 0.0
+    weighted_failed: float = 0.0
 
     @property
     def total(self) -> int:
@@ -465,11 +509,19 @@ class SuggestionLearningStats:
 
     @property
     def confidence_score(self) -> float:
+        # Anti-noise gate stays on RAW counts (≥2 real outcomes, or ≥3 ignores):
+        # recency never lets a single fresh outcome move priority.
         signal_count = self.selected + self.succeeded + self.failed
         if signal_count < 2 and self.ignored < 3:
             return 0.0
-        positive = (self.succeeded * 1.0) + (self.selected * 0.25)
-        negative = (self.failed * 1.0) + (self.ignored * 0.2)
+        # Magnitude comes from recency-weighted evidence so recent trends dominate
+        # and stale outcomes fade; fall back to raw counts when weights are absent.
+        ws = self.weighted_succeeded or float(self.succeeded)
+        wsel = self.weighted_selected or float(self.selected)
+        wf = self.weighted_failed or float(self.failed)
+        wi = self.weighted_ignored or float(self.ignored)
+        positive = (ws * 1.0) + (wsel * 0.25)
+        negative = (wf * 1.0) + (wi * 0.2)
         score = (positive - negative) / max(1.0, positive + negative)
         return round(max(-1.0, min(1.0, score)), 4)
 
@@ -481,6 +533,15 @@ class SuggestionLearningStats:
             return "downrank"
         if self.ignored >= 3 and self.selected == 0:
             return "downrank"
+        # Recency-driven adaptation: with enough real outcomes (≥2), let a strongly
+        # signed *recency-weighted* confidence decide even when the raw counts are
+        # balanced — so a tactic that USED to work but now fails is dropped fast
+        # (and a stale-failed one that now works is re-adopted). Anti-noise: needs
+        # ≥2 outcomes and a decisive |score|, so a single fresh result never flips it.
+        if self.confidence_score <= -0.5 and self.failed >= 2:
+            return "downrank"
+        if self.confidence_score >= 0.5 and self.succeeded >= 2:
+            return "boost"
         return "explanation-only"
 
     @property
@@ -611,19 +672,25 @@ def aggregate_suggestion_signals(
 ) -> list[SuggestionLearningStats]:
     """Aggregate sanitized suggestion signals by action family."""
     counters: dict[str, Counter[str]] = {}
+    weighted: dict[str, dict[str, float]] = {}
     audit_status_counters: dict[str, Counter[str]] = {}
     audit_reason_counters: dict[str, Counter[str]] = {}
     labels: dict[str, tuple[str, str]] = {}
+    now = datetime.now(timezone.utc)
+    half_life = _env_float("SECOPS_SIGNAL_HALF_LIFE_DAYS", _DEFAULT_SIGNAL_HALF_LIFE_DAYS)
     for signal in signals or ():
         key = _signal_family_key(signal)
         if not key:
             continue
         if key not in counters:
             counters[key] = Counter()
+            weighted[key] = {}
             audit_status_counters[key] = Counter()
             audit_reason_counters[key] = Counter()
             labels[key] = (signal.tool_name, signal.action_method)
         counters[key][signal.outcome] += 1
+        weight = _recency_weight(signal.created_at, half_life_days=half_life, now=now)
+        weighted[key][signal.outcome] = weighted[key].get(signal.outcome, 0.0) + weight
         if signal.audit_status:
             audit_status_counters[key][signal.audit_status] += 1
         for reason in signal.audit_reasons:
@@ -645,6 +712,10 @@ def aggregate_suggestion_signals(
                 reason
                 for reason, _count in audit_reason_counters[key].most_common(5)
             ),
+            weighted_selected=weighted[key].get("selected", 0.0),
+            weighted_ignored=weighted[key].get("ignored", 0.0),
+            weighted_succeeded=weighted[key].get("succeeded", 0.0),
+            weighted_failed=weighted[key].get("failed", 0.0),
         )
         for key, counts in counters.items()
     ]
@@ -1155,6 +1226,18 @@ def evaluate_lesson_match(
                 raw_score = (len(overlap) / max(6, len(lesson_tokens))) * (0.5 + lesson.confidence / 2)
                 if _matches_action(lesson, action):
                     raw_score += 0.25
+                # Recency decay for AUTO (unreviewed) lessons so stale auto-captured
+                # noise fades from retrieval over time and recent experience ranks
+                # higher. Human-REVIEWED lessons are curated, durable knowledge and
+                # keep full weight (they never decay). Ranking only — never the
+                # review gate or authorization; a fresh lesson keeps weight ~1.0.
+                if not lesson.is_reviewed:
+                    raw_score *= _recency_weight(
+                        lesson.created_at,
+                        half_life_days=_env_float(
+                            "SECOPS_LESSON_HALF_LIFE_DAYS", _DEFAULT_LESSON_HALF_LIFE_DAYS
+                        ),
+                    )
                 score = round(raw_score, 4)
                 if score < min_score:
                     reasons.append("insufficient compatible evidence overlap")

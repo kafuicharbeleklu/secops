@@ -329,6 +329,44 @@ class ExperienceMemoryTests(unittest.TestCase):
         self.assertEqual(by_tool["tech_detect"].effect, "downrank")
         self.assertEqual(by_tool["tech_detect"].selection_rate, 0.0)
 
+    def _aged(self, outcome, days_ago, key="d", tool="dir_brute"):
+        from datetime import datetime, timedelta, timezone
+        stamp = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+        return SuggestionSignal(outcome=outcome, action_key=key, tool_name=tool, created_at=stamp)
+
+    def test_recency_downranks_a_tactic_that_recently_started_failing(self):
+        # 2 old successes + 2 fresh failures: raw counts are balanced (neutral
+        # without recency), but recent failures dominate → adapt fast, downrank.
+        stat = aggregate_suggestion_signals([
+            self._aged("succeeded", 60), self._aged("succeeded", 60),
+            self._aged("failed", 0), self._aged("failed", 0),
+        ])[0]
+        self.assertEqual((stat.succeeded, stat.failed), (2, 2))
+        self.assertLess(stat.confidence_score, -0.5)
+        self.assertEqual(stat.effect, "downrank")
+        self.assertLess(stat.priority_delta, 0)
+
+    def test_recency_readopts_a_tactic_that_recently_started_working(self):
+        # 2 old failures + 2 fresh successes: recent successes dominate → boost.
+        stat = aggregate_suggestion_signals([
+            self._aged("failed", 60), self._aged("failed", 60),
+            self._aged("succeeded", 0), self._aged("succeeded", 0),
+        ])[0]
+        self.assertEqual((stat.succeeded, stat.failed), (2, 2))
+        self.assertGreater(stat.confidence_score, 0.5)
+        self.assertEqual(stat.effect, "boost")
+        self.assertGreater(stat.priority_delta, 0)
+
+    def test_all_fresh_balanced_outcomes_stay_neutral(self):
+        # Anti-noise: with no recency skew, a balanced 2/2 record does not move
+        # priority — recency only decides when recent evidence actually differs.
+        stat = aggregate_suggestion_signals([
+            self._aged("succeeded", 0), self._aged("succeeded", 0),
+            self._aged("failed", 0), self._aged("failed", 0),
+        ])[0]
+        self.assertEqual(stat.effect, "explanation-only")
+        self.assertEqual(stat.priority_delta, 0)
+
     def test_suggestion_signals_aggregate_audit_reasons(self):
         action = NextAction(
             title="Use playbook: bounded content discovery",
@@ -513,6 +551,47 @@ class ExperienceMemoryTests(unittest.TestCase):
         self.assertEqual(matches[0][0].title, "Similar upload panel led to extension filtering check")
         self.assertGreater(matches[0][1], 0.18)
         self.assertEqual(len(matches), 1)
+
+    def test_stale_unreviewed_lesson_fades_but_reviewed_lesson_keeps_weight(self):
+        # Recency decay applies to AUTO (unreviewed) lessons so stale auto-noise
+        # fades from retrieval, while human-REVIEWED lessons are durable knowledge
+        # and never decay. Ranking only — the review gate is unchanged.
+        from datetime import datetime, timedelta, timezone
+
+        mission = _web_upload_mission()
+        action = NextAction(
+            title="Assess upload surface at http://10.10.10.5/panel",
+            rationale="Validate the upload panel before generating payloads.",
+            method="upload_surface_validation",
+            risk="high",
+            evidence=["Status 301, Size 313"],
+        )
+
+        def _lesson(review_status: str, created_at: str | None = None) -> CaseLesson:
+            kwargs = dict(
+                title="Similar upload panel led to extension filtering check",
+                outcome="success",
+                action_method="upload_surface_validation",
+                service_fingerprints=["Apache httpd"],
+                endpoint_hints=["/panel"],
+                evidence=["Status 301 panel path"],
+                confidence=0.8,
+                review_status=review_status,
+            )
+            if created_at:
+                kwargs["created_at"] = created_at
+            return CaseLesson(**kwargs)
+
+        old = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+        fresh_unreviewed = evaluate_lesson_match(_lesson("unreviewed"), mission, action).score
+        old_unreviewed = evaluate_lesson_match(_lesson("unreviewed", old), mission, action).score
+        fresh_reviewed = evaluate_lesson_match(_lesson("reviewed"), mission, action).score
+        old_reviewed = evaluate_lesson_match(_lesson("reviewed", old), mission, action).score
+
+        self.assertIsNotNone(old_unreviewed)
+        self.assertLess(old_unreviewed, fresh_unreviewed)        # auto lesson fades with age
+        self.assertEqual(old_reviewed, fresh_reviewed)           # curated lesson never decays
+        self.assertGreater(old_reviewed, old_unreviewed)         # curated outranks stale auto
 
     def test_success_lesson_boosts_upload_candidate_and_explains_reason(self):
         mission = _web_upload_mission()
